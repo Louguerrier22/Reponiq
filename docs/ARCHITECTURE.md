@@ -31,7 +31,7 @@ The consolidated release retains existing repository/account/activity tables. Ne
 
 ## Operational caveats
 
-- Local commands use a bounded blocking worker pool; shelf status uses one Git process per repository and releases the database lock before scanning. Full scans are still proportional to registered repository count.
+- Local commands use a bounded blocking worker pool; shelf metadata reads do not execute Git. repo_summary checks one selected ID outside the database lock. The frontend schedules at most two status requests concurrently; native jobs queue asynchronously with 32 admitted/four executing bounds. All stored rows and unknown preferences remain preserved.
 - Git activity log is limited and not an authoritative audit trail.
 - GitHub sync is manually requested and rate-limit/error handling needs improvement.
 - The tray offers Show and Quit; no background polling or close-to-tray mode yet.

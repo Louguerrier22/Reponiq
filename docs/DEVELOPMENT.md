@@ -18,7 +18,7 @@ node scripts/release.mjs verify
 
 Version the npm package/lockfile, Cargo manifest/lockfile, and Tauri configuration together. Build/test the exact candidate. The workflow runs frontend checks and native Windows/Linux packaging, with a Linux startup smoke test and exact installer collection. `node scripts/release.mjs collect windows-x64` (or `linux-x64`) copies only the declared installer formats and writes SHA-256 checksums.
 
-Push the reviewed source before creating tag `v1.0.0`. Tags must match the application version and descend from `origin/main`. Collect both platform artifacts from the same commit, combine checksums, finish the full candidate-bound security audit and applicable release checks, then publish the GitHub release with those exact files. CI cannot publish a release. Do not advertise unbuilt formats or substitute source ZIPs for installers.
+Push the reviewed source before creating the matching version tag (currently `v1.0.1`). Tags must match the application version and descend from `origin/main`. Collect both platform artifacts from the same commit, combine checksums, finish the full candidate-bound security audit and applicable release checks, then publish the GitHub release with those exact files. CI cannot publish a release. Do not advertise unbuilt formats or substitute source ZIPs for installers.
 
 Release signing and automatic updates are not configured. Native builds, installed/runtime evidence, visual review, and publication are tracked separately in [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
 

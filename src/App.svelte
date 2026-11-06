@@ -17,7 +17,7 @@
 
   import { Activity, ArrowDown, ArrowLeftRight, ArrowUp, Check, CircleAlert, Clock3, Code2, FileCode, Folder, FolderGit2, GitBranch, GitCommitHorizontal, Github, History, LayoutDashboard, LoaderCircle, Pin, Plus, RefreshCw, Search, Settings, ShieldCheck, Tags, X } from 'lucide-svelte';
 
-  import { api, filteredRepos, type Repo, type Activity as ActivityItem, type Account, type RepoDetails, type LoginCode, type WorkspaceSettings, type Discovery } from './lib/api';
+  import { api, filteredRepos, type Repo, type Activity as ActivityItem, type Account, type RepoDetails, type LoginCode, type WorkspaceSettings, type Discovery, type RepoSummary } from './lib/api';
 
   let repos = $state<Repo[]>([]);
 
@@ -51,12 +51,18 @@
   async function workspaceSaved(settings:WorkspaceSettings){workspace=settings;showSetup=false;++discoverySequence;found=null;discoveryError='';void scanDefault();if(!await api.walkthroughSeen())showWalkthrough=true;}
   async function skipSetup(){if(setupBusy)return;setupBusy=true;try{await workspaceSaved(await api.saveWorkspaceSettings({...workspace,setup_complete:true}));}catch(e){error=String(e);}finally{setupBusy=false;}}
   function openImport(initial:Discovery|null=null){importInitial=initial;showImport=true;}
-  async function imported(count:number){showImport=false;found=null;notice=`Imported ${count} repositories`;await load();}
+  async function imported(count:number){showImport=false;found=null;query='';view='all';selected=null;notice=`Imported ${count} repositories`;await load();}
 
 
   let showAccount = $state(false);
 
-  let showOrganize = $state(false);
+  let showOrganize = $state(false);let organizing=$state(false);let pendingPins=$state<number[]>([]);
+  let alive=true,metadataRevision=0;const localRevisions=new Map<number,number>();const statusVersions=new Map<number,number>();const statusQueue=new Set<number>();const activeStatuses=new Set<number>();
+  function changedMetadata(id:number){localRevisions.set(id,++metadataRevision);}
+  function requestStatuses(ids:number[]){for(const id of ids)if(!activeStatuses.has(id))statusQueue.add(id);drainStatuses();}
+  function applySummary(summary:RepoSummary){repos=repos.map(repo=>repo.id===summary.id?{...repo,branch:summary.branch,dirty:summary.dirty,ahead:summary.ahead,behind:summary.behind,status_error:summary.status_error,status_pending:false}:repo);}
+  function drainStatuses(){if(!alive)return;while(activeStatuses.size<2){const id=[...statusQueue].find(id=>!(working&&id===selected));if(id===undefined)return;statusQueue.delete(id);if(!repos.some(r=>r.id===id))continue;activeStatuses.add(id);const version=statusVersions.get(id)??0;void api.summary(id).then(summary=>{if(alive&&(statusVersions.get(id)??0)===version)applySummary(summary);}).catch(e=>{if(alive&&(statusVersions.get(id)??0)===version)repos=repos.map(r=>r.id===id?{...r,status_pending:false,status_error:String(e)}:r);}).finally(()=>{activeStatuses.delete(id);drainStatuses();});}}
+  async function togglePin(repo:Repo){if(pendingPins.includes(repo.id))return;const value=!repo.pinned;changedMetadata(repo.id);pendingPins=[...pendingPins,repo.id];repos=repos.map(r=>r.id===repo.id?{...r,pinned:value}:r);try{await api.pin(repo.id,value);}catch(e){if(alive){repos=repos.map(r=>r.id===repo.id?{...r,pinned:!value}:r);error=String(e);}}finally{changedMetadata(repo.id);pendingPins=pendingPins.filter(id=>id!==repo.id);}}
 
 
   let token = $state('');
@@ -128,30 +134,14 @@
 
   const short = (value: string, max = 45) => value.length > max ? '…' + value.slice(-(max-1)) : value;
 
+  let supplementaryFlight:Promise<void>|null=null;
+  function loadSupplementary(){if(supplementaryFlight)return;supplementaryFlight=Promise.allSettled([api.activity().then(rows=>{if(alive)activities=rows;}),api.accounts().then(rows=>{if(alive)accounts=rows;})]).then(results=>{const failure=results.find(r=>r.status==='rejected');if(alive&&failure?.status==='rejected')error=String(failure.reason);}).finally(()=>supplementaryFlight=null);}
   async function load() {
-
-    if (loadFlight) return loadFlight;
-
-    loadFlight = (async () => {
-
-      const results = await Promise.allSettled([api.repos(), api.activity(), api.accounts()]);
-
-      if (results[0].status === 'fulfilled') repos = results[0].value;
-
-      if (results[1].status === 'fulfilled') activities = results[1].value;
-
-      if (results[2].status === 'fulfilled') accounts = results[2].value;
-
-      const failed = results.find(r => r.status === 'rejected');
-
-      if (failed?.status === 'rejected') error = String(failed.reason);
-
-      loading = false;
-
-    })().finally(() => { loadFlight = null; });
-
+    loadSupplementary();
+    if(loadFlight)return loadFlight;
+    const revision=metadataRevision;
+    loadFlight=api.repos().then(rows=>{if(!alive)return;const previous=new Map(repos.map(r=>[r.id,r]));repos=rows.map(row=>{const old=previous.get(row.id);if(!old||old.path!==row.path)return row;const git={branch:old.branch,dirty:old.dirty,ahead:old.ahead,behind:old.behind,status_error:old.status_error,status_pending:old.status_pending};const local=(localRevisions.get(row.id)??0)>revision||pendingPins.includes(row.id)?{pinned:old.pinned,collection:old.collection,tags:old.tags}:{};return {...row,...git,...local};});requestStatuses(repos.map(r=>r.id));}).catch(e=>{if(alive)error=String(e);}).finally(()=>{if(alive)loading=false;loadFlight=null;});
     return loadFlight;
-
   }
 
   function beginSelection(id: number) {
@@ -163,7 +153,7 @@
   }
   async function selectRepo(id:number) {
     const sequence = beginSelection(id);
-    try { const result = await api.details(id); if (sequence === selectionSequence && selected === id) { details = result; if (result.changes[0]) void showDiff(result.changes[0].path, id); } }
+    try { const result = await api.details(id); if (sequence === selectionSequence && selected === id) { details = result; updateRepoStatus(id,result); if (result.changes[0]) void showDiff(result.changes[0].path, id); } }
 
     catch(e) { if (sequence === selectionSequence) detailError = String(e); }
 
@@ -174,7 +164,7 @@
     if (working) return false;
 
     const actionRepo = selected;
-    working=true; error='';
+    working=true; error='';if(actionRepo!==null)statusVersions.set(actionRepo,(statusVersions.get(actionRepo)??0)+1);
 
     try {
 
@@ -188,7 +178,7 @@
 
       return true;
 
-    } catch(e) {error=String(e);if(refreshWorkspace)await load();const id=selected;if(id!==null){try{const result=await api.details(id);if(selected===id){details=result;updateRepoStatus(id,result);}}catch{}}return false;} finally {working=false;}
+    } catch(e) {error=String(e);if(refreshWorkspace)await load();const id=selected;if(id!==null){try{const result=await api.details(id);if(selected===id){details=result;updateRepoStatus(id,result);}}catch{}}return false;} finally {working=false;drainStatuses();}
 
   }
 
@@ -200,7 +190,7 @@
     else{selected=null;view=target==='connect'?'settings':'all';}
     await tick();
   }
-  function updateRepoStatus(id:number,result:RepoDetails){repos=repos.map(repo=>repo.id===id?{...repo,branch:result.git.branch,dirty:result.git.dirty,ahead:result.git.ahead,behind:result.git.behind,status_error:null}:repo);}
+  function updateRepoStatus(id:number,result:RepoDetails){statusVersions.set(id,(statusVersions.get(id)??0)+1);repos=repos.map(repo=>repo.id===id?{...repo,branch:result.git.branch,dirty:result.git.dirty,ahead:result.git.ahead,behind:result.git.behind,status_error:null,status_pending:false}:repo);}
   async function refresh(){
     if(refreshing||working)return;refreshing=true;error='';const sequence=selectionSequence;
     try{const id=selected;if(id===null)await load();if(id!==null){const result=await api.details(id);if(selected===id&&sequence===selectionSequence){details=result;updateRepoStatus(id,result);detailError='';if(activeTab==='changes'){const file=result.changes.some(item=>item.path===selectedFile)?selectedFile:result.changes[0]?.path??null;void showDiff(file,id);}}}}
@@ -210,11 +200,11 @@
   async function openOrganization(repo: Repo | undefined = current ?? repos[0]) {
     if(working)return;
     if(!repo){openAdd();return;}
-    if(selected!==repo.id)await selectRepo(repo.id);
+    if(selected!==repo.id)void selectRepo(repo.id);
     if(working||selected!==repo.id)return;
     collection=repo.collection?[repo.collection]:[];tags=[...repo.tags];showOrganize=true;
   }
-  async function organize(){if(!current)return;if(await act(()=>api.organize(current.id,collection[0]??'',tags),'Collection updated'))showOrganize=false;}
+  async function organize(){if(!current||organizing)return;const id=current.id;const group=collection[0]??'';const values=[...tags];organizing=true;try{await api.organize(id,group,values);if(alive){changedMetadata(id);repos=repos.map(r=>r.id===id?{...r,collection:group||null,tags:values}:r);showOrganize=false;notice='Collection updated';}}catch(e){if(alive)error=String(e);}finally{organizing=false;}}
 
   function openAccount(){accountMode='browser';privateRepos=false;loginError='';loginMessage='';showAccount=true;}
   function closeAccount(){
@@ -287,7 +277,17 @@
 
   function confirmGit(action:string){const labels:{[k:string]:[string,string]}={pull:['Pull changes?','Fetch and fast-forward this branch from its upstream.'],push:['Push branch?','Push the committed branch to its tracking remote.'],merge_upstream:['Merge upstream?','Combine the latest upstream with this branch without rewriting history. Conflicts may need to be resolved.'],abort_operation:['Abort Git operation?','Resolution work from this operation may be discarded. Git will attempt to restore the pre-operation state.'],unstage_all:['Unstage all files?','Keep the working files and remove them from the next commit.']};const label=labels[action];if(label)queueGit(action,...label);else void runGit(action);}
 
-  onMount(()=>{void load().then(()=>api.workspaceSettings()).then(async settings=>{workspace=settings;if(!settings.setup_complete)showSetup=true;else{if(!await api.walkthroughSeen())showWalkthrough=true;void scanDefault();}}).catch(e=>error=String(e));void api.browserLoginAvailable().then(value=>browserAvailable=value).catch(()=>browserAvailable=false);const timer=setInterval(()=>{if(document.visibilityState==='visible'&&!working&&!document.querySelector('dialog[open]')&&!showAdd&&!showAccount&&!showOrganize){void load();void scanDefault();}},60000);return()=>{clearInterval(timer);closeAccount();}});
+  onMount(()=>{
+    void load();
+    void api.workspaceSettings().then(async settings=>{if(!alive)return;workspace=settings;if(!settings.setup_complete)showSetup=true;else{if(!await api.walkthroughSeen()&&alive)showWalkthrough=true;void scanDefault();}}).catch(e=>{if(alive)error=String(e);});
+    void api.browserLoginAvailable().then(value=>{if(alive)browserAvailable=value;}).catch(()=>browserAvailable=false);
+    const idle=()=>document.visibilityState==='visible'&&!working&&!document.querySelector('dialog[open]');
+    const timer=setInterval(()=>{if(idle()){void load();void scanDefault();}},60000);
+    const statusTimer=setInterval(()=>{if(idle()){if(selected!==null)void refresh();else requestStatuses(visible.slice((page-1)*pageSize,page*pageSize).map(r=>r.id));}},10000);
+    let lastFocus=0;const focus=()=>{if(idle()&&Date.now()-lastFocus>2000){lastFocus=Date.now();if(selected!==null)void refresh();else void load();}};
+    window.addEventListener('focus',focus);document.addEventListener('visibilitychange',focus);
+    return()=>{alive=false;statusQueue.clear();clearInterval(timer);clearInterval(statusTimer);window.removeEventListener('focus',focus);document.removeEventListener('visibilitychange',focus);closeAccount();};
+  });
 
 </script>
 
@@ -327,7 +327,7 @@
 
       <button title="Settings" onclick={()=>{selected=null;view='settings'}} class:active={view==='settings'}><Settings size={17}/> Settings</button>
 
-      <div class="connection"><span class="live-dot"></span> Local workspace <span class="version">v1.0</span></div>
+      <div class="connection"><span class="live-dot"></span> Local workspace <span class="version">v1.0.1</span></div>
 
     </div>
 
@@ -348,11 +348,11 @@
           <section class="workbench-main" aria-label="Git workbench">
             <div class="page-heading workbench-heading">
               <div><button class="back-link" onclick={()=>{selected=null;details=null}}><ArrowLeftRight size={14}/> All repositories</button><div class="heading-row"><PlatformIcon remote={current.remote_url} size={25}/><h1>{current.name}</h1></div><p title={current.path}>{current.path}</p></div>
-              <div class="heading-actions"><button class="secondary" aria-label={current.pinned?'Unpin repository':'Pin repository'} disabled={working} onclick={()=>act(()=>api.pin(current.id,!current.pinned),current.pinned?'Unpinned':'Pinned')}><Pin size={16}/></button><button class="secondary" disabled={working} onclick={()=>openOrganization(current)}><Tags size={15}/> Organize</button></div>
+              <div class="heading-actions"><button class="secondary" aria-label={current.pinned?'Unpin repository':'Pin repository'} disabled={pendingPins.includes(current.id)} onclick={()=>togglePin(current)}><Pin size={16}/></button><button class="secondary" disabled={working} onclick={()=>openOrganization(current)}><Tags size={15}/> Organize</button></div>
             </div>
             <div class="workbench-tools">
               <label class="branch-control"><GitBranch size={16}/><select aria-label="Current branch" value={current.branch} onchange={branchChanged} disabled={working||!details||!!gitState?.operation}>{#if !details?.branches.includes(current.branch)}<option value={current.branch}>{current.branch}</option>{/if}{#each details?.branches??[] as branch}<option value={branch}>{branch}</option>{/each}<option value="">+ Create branch…</option></select></label>
-              <div class="toolbar"><button title="Refresh status" aria-label="Refresh status" onclick={refresh} disabled={refreshing||working}><RefreshCw size={14}/></button><button onclick={()=>runGit('fetch')} disabled={working||!!current.status_error||!gitState?.remotes.length}><RefreshCw size={14}/> Fetch</button><button onclick={()=>confirmGit('pull')} title={gitState?.upstream??'Publish this branch to set an upstream'} disabled={working||!!current.status_error||!gitState?.upstream||!!gitState?.dirty||!!gitState?.operation}><ArrowDown size={14}/> Pull</button><button class="primary" onclick={()=>confirmGit('push')} title={gitState?.dirty?'Commit all changes before pushing':!gitState?.remote?'No tracking remote configured':'Push committed changes'} disabled={pushBlocked||!!current.status_error}><ArrowUp size={14}/> {gitState?.upstream?'Push':'Publish branch'}</button></div>
+              <div class="toolbar"><button onclick={()=>runGit('fetch')} disabled={working||!!current.status_error||!gitState?.remotes.length}><RefreshCw size={14}/> Fetch</button><button onclick={()=>confirmGit('pull')} title={gitState?.upstream??'Publish this branch to set an upstream'} disabled={working||!!current.status_error||!gitState?.upstream||!!gitState?.dirty||!!gitState?.operation}><ArrowDown size={14}/> Pull</button><button class="primary" onclick={()=>confirmGit('push')} title={gitState?.dirty?'Commit all changes before pushing':!gitState?.remote?'No tracking remote configured':'Push committed changes'} disabled={pushBlocked||!!current.status_error}><ArrowUp size={14}/> {gitState?.upstream?'Push':'Publish branch'}</button></div>
             </div>
             <div class="workbench-status"><span class="status-label" class:status-warning={current.dirty>0||current.behind>0||!!current.status_error}><i></i>{current.status_error?'Unavailable':current.dirty?'Changed':'Clean'}</span><span><ArrowUp size={13}/>{current.ahead} ahead</span><span><ArrowDown size={13}/>{current.behind} behind</span>{#if current.ci_conclusion||current.ci_status}<span class="workbench-ci"><PlatformIcon remote="https://github.com" size={14}/>{current.ci_conclusion??current.ci_status}</span>{/if}</div>
             {#if gitState?.operation||gitState?.conflicts.length}<section class="operation-banner" aria-label="Git operation"><div><strong>{gitState.operation??'Git operation'} paused</strong><span>{gitState.conflicts.length?gitState.conflicts.length+' conflicting files':'Conflicts resolved. Continue to finish.'}</span></div><div class="toolbar"><button class="primary" disabled={working||gitState.conflicts.length>0} onclick={()=>runGit('continue_operation')}>Continue</button><button class="secondary dangerous" disabled={working} onclick={()=>confirmGit('abort_operation')}>Abort</button></div></section>{:else if gitState&&gitState.ahead>0&&gitState.behind>0}<section class="operation-banner"><div><strong>Branches have diverged</strong><span>{gitState.ahead} local · {gitState.behind} upstream commits</span></div><button class="secondary" disabled={working||gitState.dirty>0} onclick={()=>confirmGit('merge_upstream')}>Merge upstream</button></section>{/if}
@@ -418,15 +418,15 @@
         <div class="shelf-tools">
           <div class="collection-chips" aria-label="Filter by collection"><button class:chip-active={view==='all'} onclick={()=>view='all'}>All</button>{#each collections as c}<button class:chip-active={view==='collection:'+c} onclick={()=>view='collection:'+c}><Folder size={13}/>{c}</button>{/each}</div>
           <div class="search-input shelf-search"><Search size={17}/><input data-tour="search" bind:this={searchInput} aria-label="Search repositories" placeholder="Search repositories" bind:value={query}/><kbd class="key-hint">Ctrl K</kbd></div>
-          <button class="secondary shelf-refresh" title="Refresh repositories" aria-label="Refresh repositories" onclick={refresh} disabled={refreshing||working}><RefreshCw size={16}/></button>
+
         </div>
         <div class="shelf-count">{visible.length} {visible.length===1?'repository':'repositories'}</div>
         <div class="repository-shelf" aria-label="Repositories">
-          {#each visible.slice((page-1)*pageSize,page*pageSize) as r}
+          {#each visible.slice((page-1)*pageSize,page*pageSize) as r (r.id)}
             <article class="repository-card">
-              <div class="card-heading"><button class="card-open" onclick={()=>selectRepo(r.id)}><span class="card-icon"><PlatformIcon remote={r.remote_url} size={25}/></span><h2>{r.name}</h2></button><button class="card-pin" class:is-pinned={r.pinned} aria-label={r.pinned?'Unpin '+r.name:'Pin '+r.name} title={r.pinned?'Unpin':'Pin'} disabled={working} onclick={()=>act(()=>api.pin(r.id,!r.pinned),r.pinned?'Unpinned':'Pinned')}><Pin size={17}/></button></div>
+              <div class="card-heading"><button class="card-open" onclick={()=>selectRepo(r.id)}><span class="card-icon"><PlatformIcon remote={r.remote_url} size={25}/></span><h2>{r.name}</h2></button><button class="card-pin" class:is-pinned={r.pinned} aria-label={r.pinned?'Unpin '+r.name:'Pin '+r.name} title={r.pinned?'Unpin':'Pin'} disabled={pendingPins.includes(r.id)} onclick={()=>togglePin(r)}><Pin size={17}/></button></div>
               <p class="card-path" title={r.path}><span class="platform-name">{remoteInfo(r.remote_url).label}</span> · {remoteInfo(r.remote_url).project||short(r.path,64)}</p>
-              <div class="card-state"><span class="card-branch" title={r.branch}><GitBranch size={14}/>{r.branch}</span>{#if r.status_error}<span class="pill red" title={r.status_error}>Unavailable</span>{:else if r.dirty>0}<span class="pill yellow">{r.dirty} changed</span>{:else if r.ci_conclusion==='failure'}<span class="pill red">CI failed</span>{:else}<span class="pill green"><Check size={12}/> Clean</span>{/if}</div>
+              <div class="card-state"><span class="card-branch" title={r.branch}><GitBranch size={14}/>{r.branch||'—'}</span>{#if r.status_pending}<span class="pill">Checking…</span>{:else if r.status_error}<span class="pill red" title={r.status_error}>Unavailable</span>{:else if r.dirty>0}<span class="pill yellow">{r.dirty} changed</span>{:else if r.ci_conclusion==='failure'}<span class="pill red">CI failed</span>{:else}<span class="pill green"><Check size={12}/> Clean</span>{/if}</div>
               <div class="card-counts"><span><ArrowUp size={13}/>{r.ahead} ahead</span><span><ArrowDown size={13}/>{r.behind} behind</span>{#if r.collection}<span class="card-collection" title={r.collection}>{r.collection}</span>{/if}</div>
               <footer class="card-footer">{#if activities.find(item=>item.repo_id===r.id)}<span><Clock3 size={12}/>{date(activities.find(item=>item.repo_id===r.id)!.occurred_at)}</span>{:else}<span class="card-tags">{r.tags.slice(0,3).join(' / ')}</span>{/if}{#if r.ci_conclusion||r.ci_status}<span class="card-ci"><Activity size={12}/>{r.ci_conclusion??r.ci_status}</span>{/if}</footer>
             </article>
@@ -445,7 +445,7 @@
 
 {#if showAdd}<AddRepository {accounts} defaultFolder={workspace.default_folder} onclose={closeAdd} onconnect={()=>{closeAdd();openAccount();}} oncreated={repositoryAdded}/>{/if}
 
-{#if showOrganize}<Modal label="Organize repository" onclose={()=>{showOrganize=false;}}><div class="modal-top"><div><h2>Organize {current?.name??'repository'}</h2></div><button class="top-icon" aria-label="Close dialog" onclick={()=>showOrganize=false}><X size={18}/></button></div><TokenInput label="Collection" bind:items={collection} maxItems={1} maxLength={100}/><TokenInput label="Tags" bind:items={tags}/><div class="modal-actions"><button class="secondary" onclick={()=>showOrganize=false}>Cancel</button><button class="primary" onclick={organize} disabled={working}>Save changes</button></div></Modal>{/if}
+{#if showOrganize}<Modal label="Organize repository" canClose={!organizing} onclose={()=>{showOrganize=false;}}><div class="modal-top"><div><h2>Organize {current?.name??'repository'}</h2></div><button class="top-icon" aria-label="Close dialog" onclick={()=>showOrganize=false}><X size={18}/></button></div><TokenInput label="Collection" bind:items={collection} maxItems={1} maxLength={100}/><TokenInput label="Tags" bind:items={tags}/><div class="modal-actions"><button class="secondary" onclick={()=>showOrganize=false}>Cancel</button><button class="primary" onclick={organize} disabled={organizing}>Save changes</button></div></Modal>{/if}
 
 {#if showAccount}<Modal label="Connect GitHub" onclose={closeAccount}><div class="modal-top"><div><h2>Connect GitHub</h2></div><button class="top-icon" aria-label="Close dialog" onclick={closeAccount}><X size={18}/></button></div>
   {#if loginError}<p class="connection-error" role="alert">{loginError}</p>{/if}

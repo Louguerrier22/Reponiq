@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { remoteInfo } from './platform';
-export type Repo = { id: number; path: string; name: string; remote_url: string | null; pinned: boolean; collection: string | null; tags: string[]; branch: string; dirty: number; ahead: number; behind: number; github_full_name: string | null; ci_conclusion: string | null; ci_status: string | null; status_error?: string | null };
+export type Repo = { id: number; path: string; name: string; remote_url: string | null; pinned: boolean; collection: string | null; tags: string[]; branch: string; dirty: number; ahead: number; behind: number; github_full_name: string | null; ci_conclusion: string | null; ci_status: string | null; status_error?: string | null;status_pending?:boolean };
+export type RepoSummary = Pick<Repo,'id'|'branch'|'dirty'|'ahead'|'behind'|'status_error'>;
 export type Commit = { hash: string; subject: string; author: string; timestamp: number };
 export type Activity = { id: number; repo_id: number | null; repo_name: string | null; kind: string; title: string; detail: string | null; occurred_at: number };
 export type Account = { id: number; login: string; api_host: string; created_at: number };
@@ -35,7 +36,8 @@ export const api = {
   workspaceSettings: () => invoke<WorkspaceSettings>('workspace_settings'),
   saveWorkspaceSettings: (input:WorkspaceSettings) => invoke<WorkspaceSettings>('save_workspace_settings',{input}),
   discover: (source:ImportSource,folder:string|null=null) => invoke<Discovery>('discover_repositories',{source,folder}),
-  importRepositories: (paths:string[]) => invoke<{added:number;remaining:string[]}>('import_repositories',{paths}),
+  importRepositories: (paths:string[]) => invoke<{added:number;remaining:string[];failures?:{path:string;message:string}[]}>('import_repositories',{paths}),
+  summary: (id:number) => invoke<RepoSummary>('repo_summary',{id}),
   repos: () => invoke<Repo[]>('list_repos'),
   add: (path: string) => invoke<Repo>('add_repo', { path }),
   pickRepoFolder: (purpose:'repository'|'parent'='repository') => invoke<string | null>('pick_repo_folder',{purpose}),

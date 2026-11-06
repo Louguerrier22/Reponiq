@@ -1,4 +1,4 @@
-Reponiq v1.0.0 — third-party notices
+Reponiq v1.0.1 — third-party notices
 
 Reponiq source and original artwork: MIT; see LICENSE.
 Dependencies remain under their respective licenses. Dependency sources are unmodified.

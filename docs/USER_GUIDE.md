@@ -2,7 +2,7 @@
 
 [Documentation](README.md) · [Install](INSTALLATION.md) · [Troubleshooting](TROUBLESHOOTING.md)
 
-This guide describes Reponiq 1.0.0. On first launch, choose a default repository folder or skip setup. A short walkthrough then introduces repositories, commits and remote work. Skip or finish it at any time; reopen it from the bottom of Settings.
+This guide describes Reponiq 1.0.1. On first launch, choose a default repository folder or skip setup. A short walkthrough then introduces repositories, commits and remote work. Skip or finish it at any time; reopen it from the bottom of Settings.
 
 ## Repositories and organization
 
@@ -26,9 +26,9 @@ Provider badges identify recognized hosts. Self-hosted detection is a display hi
 
 Choose the default repository folder with the native **Browse...** dialog. Create and Clone start with this location. Settings > Repository folder lets you change it and enable automatic discovery. Detection checks local folders at startup and during the idle refresh; it does not move, clone, upload or register repositories. Choose **Review & import**, check the repositories you want, then import them. An unavailable saved folder stays saved and offers a repair choice.
 
-**Import from...** offers GitHub Desktop, Visual Studio Code, your default folder, or a folder used by any Git client. GitHub Desktop import reads repository paths from its local history logs; this is a best-effort discovery aid, not a complete export of its library. Old or missing log entries may be absent. VS Code import reads recent local folder paths. For SourceTree, GitKraken, another editor or missing entries, choose **Folder - any Git client** and scan the folder containing those repositories. Account credentials and client settings are not imported.
+**Import from...** offers GitHub Desktop, Visual Studio Code, your default folder, or a folder used by any Git client. GitHub Desktop import reads repository paths from its local history logs; this is a best-effort discovery aid, not a complete export of its library. Old or missing log entries may be absent, so GitHub Desktop import also scans your saved repository folder when one is configured. Each candidate identifies its source; this fallback can include repositories that were not recorded by GitHub Desktop. VS Code import reads recent local folder paths. For SourceTree, GitKraken, another editor or missing entries, choose **Folder - any Git client** and scan the folder containing those repositories. Account credentials and client settings are not imported.
 
-Review happens before Reponiq runs Git for these candidates. Register only repositories you trust. Discovery excludes registered paths, skips generated/hidden directories, and scans at most three levels, 4,000 entries, 200 candidates or 12 seconds. Choose a smaller folder if a limit is reached. Worktree `.git` files are recognized; bare repositories are not included. Import preserves original locations and reports partial results so failed entries can be reviewed separately.
+Review happens before Reponiq runs Git for these candidates. Register only repositories you trust. Discovery excludes registered paths, skips generated/hidden directories, and scans at most three levels, 4,000 entries, 200 candidates or 12 seconds. Choose a smaller folder if a limit is reached. Worktree `.git` files are recognized; bare repositories are not included. Import preserves original locations and reports partial results so failed entries can be reviewed separately. Each failed path includes a recovery reason; a batch time limit is distinguished from a repository/Git error. Successful import clears the old shelf search so new entries are visible. Already registered folders are omitted from discovery.
 
 On Linux, Create and Clone require a parent folder owned by your account that other users cannot modify. Existing repository registration has no such creation restriction.
 
@@ -58,7 +58,7 @@ Lists load 25 PRs and 100 files per page. Commit selection covers the first 100 
 
 ## Activity, storage and keyboard
 
-Sync GitHub manually retrieves recent Actions runs. It is not a complete GitHub audit trail. No background GitHub polling is configured. Ctrl+K focuses shelf search. Escape dismisses idle dialogs; mutation dialogs stay open until the operation finishes. Focus returns to the trigger.
+Sync GitHub manually retrieves recent Actions runs. It is not a complete GitHub audit trail. No background GitHub polling is configured. The saved shelf loads before Git status checks, and local status updates automatically while the window is visible or regains focus. Pinning and organization do not rescan the workspace. Ctrl+K focuses shelf search. Escape dismisses idle dialogs; mutation dialogs stay open until the operation finishes. Focus returns to the trigger.
 
 Windows stores metadata at %APPDATA%\Reponiq\reponiq.sqlite. Linux uses ${XDG_DATA_HOME:-~/.local/share}/reponiq/reponiq.sqlite. Existing ForgeDesk installations continue using ForgeDesk/forgedesk.sqlite (Windows) or forgedesk/forgedesk.sqlite (Linux), with the original credential namespace. If both databases exist, the legacy database takes priority; they are not merged automatically. Back up the database separately from the OS credential store.
 

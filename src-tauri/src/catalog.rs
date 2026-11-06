@@ -276,6 +276,7 @@ impl NewDirectory {
             ci_conclusion: None,
             ci_status: None,
             status_error: None,
+            status_pending: false,
         })
     }
 }

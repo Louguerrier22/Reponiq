@@ -1,6 +1,6 @@
 [package]
 name = "reponiq"
-version = "1.0.0"
+version = "1.0.1"
 description = "Local-first Git and GitHub dashboard"
 authors = ["Reponiq Contributors"]
 edition = "2021"

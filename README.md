@@ -2,7 +2,7 @@
 <h1 align="center">Reponiq</h1>
 <p align="center">Your repositories. One focused workspace.</p>
 <p align="center">
-<a href="https://github.com/Louguerrier22/Reponiq/releases/tag/v1.0.0"><img alt="Version 1.0.0" src="https://img.shields.io/badge/version-1.0.0-a99bff?style=flat-square"></a>
+<a href="https://github.com/Louguerrier22/Reponiq/releases/tag/v1.0.1"><img alt="Version 1.0.1" src="https://img.shields.io/badge/version-1.0.1-a99bff?style=flat-square"></a>
 <a href="https://github.com/Louguerrier22/Reponiq/actions/workflows/ci.yml"><img alt="Build status" src="https://github.com/Louguerrier22/Reponiq/actions/workflows/ci.yml/badge.svg"></a>
 <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-a99bff?style=flat-square"></a>
 </p>
@@ -18,10 +18,10 @@ A native desktop Git workspace for Windows and Linux. Organize projects, review 
 
 | Platform | Installer | Runtime |
 | --- | --- | --- |
-| Windows 10/11 x64 | [Windows installer](https://github.com/Louguerrier22/Reponiq/releases/download/v1.0.0/Reponiq-1.0.0-windows-x64.exe) | Microsoft WebView2 |
-| Ubuntu / Debian x64 | [Debian package](https://github.com/Louguerrier22/Reponiq/releases/download/v1.0.0/Reponiq-1.0.0-linux-x64.deb) | WebKitGTK 4.1 |
-| Fedora / RHEL family x64 | [RPM package](https://github.com/Louguerrier22/Reponiq/releases/download/v1.0.0/Reponiq-1.0.0-linux-x64.rpm) | WebKitGTK 4.1 |
-| Other Linux x64 | [AppImage](https://github.com/Louguerrier22/Reponiq/releases/download/v1.0.0/Reponiq-1.0.0-linux-x64.AppImage) | WebKitGTK 4.1 / FUSE support |
+| Windows 10/11 x64 | [Windows installer](https://github.com/Louguerrier22/Reponiq/releases/download/v1.0.1/Reponiq-1.0.1-windows-x64.exe) | Microsoft WebView2 |
+| Ubuntu / Debian x64 | [Debian package](https://github.com/Louguerrier22/Reponiq/releases/download/v1.0.1/Reponiq-1.0.1-linux-x64.deb) | WebKitGTK 4.1 |
+| Fedora / RHEL family x64 | [RPM package](https://github.com/Louguerrier22/Reponiq/releases/download/v1.0.1/Reponiq-1.0.1-linux-x64.rpm) | WebKitGTK 4.1 |
+| Other Linux x64 | [AppImage](https://github.com/Louguerrier22/Reponiq/releases/download/v1.0.1/Reponiq-1.0.1-linux-x64.AppImage) | WebKitGTK 4.1 / FUSE support |
 
 Install [Git](https://git-scm.com/downloads) first. See [installation and checksum verification](docs/INSTALLATION.md) for prerequisites. Installers are unsigned; there is no automatic updater. Repository access is required while distribution remains private. Availability and tested limits are recorded in [release verification](docs/RELEASE_CHECKLIST.md).
 

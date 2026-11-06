@@ -46,6 +46,7 @@ struct Repo {
     ci_conclusion: Option<String>,
     ci_status: Option<String>,
     status_error: Option<String>,
+    status_pending: bool,
 }
 #[derive(Serialize)]
 struct Commit {
@@ -205,10 +206,8 @@ fn git_capture_impl(
 ) -> Result<String, String> {
     use std::io::{Read, Seek, SeekFrom};
     use std::process::Stdio;
-    static GIT_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = GIT_LOCK.lock().map_err(err)?;
     let mut stdout = tempfile::tempfile().map_err(err)?;
-    let stderr = tempfile::tempfile().map_err(err)?;
+    let mut stderr = tempfile::tempfile().map_err(err)?;
     let mut command = Command::new(git_binary()?);
     if let Some(directory) = directory {
         #[cfg(target_os = "linux")]
@@ -274,6 +273,12 @@ fn git_capture_impl(
         std::thread::sleep(std::time::Duration::from_millis(10));
     };
     if !status.success() {
+        stderr.seek(SeekFrom::Start(0)).map_err(err)?;
+        let mut diagnostic = String::new();
+        stderr.take(65536).read_to_string(&mut diagnostic).ok();
+        if diagnostic.contains("detected dubious ownership") {
+            return Err("Git does not trust this folder's ownership. Check its owner and approve only this trusted repository in Git before importing.".into());
+        }
         return Err(format!("Git exited with status {}. Check repository access, branch state, and system Git credentials.",status.code().unwrap_or(-1)));
     }
     if stdout.metadata().map_err(err)?.len() > MAX_OUTPUT {
@@ -408,10 +413,47 @@ fn build_repo(
     ci_status: Option<String>,
     ci_conclusion: Option<String>,
 ) -> Repo {
-    let (branch, dirty, ahead, behind, status_error) = match status(Path::new(&path)) {
-        Ok((branch, dirty, ahead, behind)) => (branch, dirty, ahead, behind, None),
-        Err(error) => ("Unavailable".into(), 0, 0, 0, Some(error)),
-    };
+    let mut repo = repository_metadata(
+        id,
+        path,
+        name,
+        remote_url,
+        pinned,
+        collection,
+        tags,
+        ci_status,
+        ci_conclusion,
+    );
+    update_summary(&mut repo);
+    repo
+}
+fn update_summary(repo: &mut Repo) {
+    match status(Path::new(&repo.path)) {
+        Ok((branch, dirty, ahead, behind)) => {
+            repo.branch = branch;
+            repo.dirty = dirty;
+            repo.ahead = ahead;
+            repo.behind = behind;
+            repo.status_error = None;
+        }
+        Err(error) => {
+            repo.branch = "Unavailable".into();
+            repo.status_error = Some(error);
+        }
+    }
+    repo.status_pending = false;
+}
+fn repository_metadata(
+    id: i64,
+    path: String,
+    name: String,
+    remote_url: Option<String>,
+    pinned: i64,
+    collection: Option<String>,
+    tags: String,
+    ci_status: Option<String>,
+    ci_conclusion: Option<String>,
+) -> Repo {
     let github_full_name = remote_url.as_deref().and_then(full_name);
     Repo {
         id,
@@ -421,16 +463,42 @@ fn build_repo(
         pinned: pinned != 0,
         collection,
         tags: serde_json::from_str(&tags).unwrap_or_default(),
+        branch: String::new(),
+        dirty: 0,
+        ahead: 0,
+        behind: 0,
+        github_full_name,
+        ci_conclusion,
+        ci_status,
+        status_error: None,
+        status_pending: true,
+    }
+}
+#[derive(Serialize)]
+struct RepoSummary {
+    id: i64,
+    branch: String,
+    dirty: usize,
+    ahead: i64,
+    behind: i64,
+    status_error: Option<String>,
+}
+fn repo_summary_impl(id: i64, state: &State) -> Result<RepoSummary, String> {
+    let path = repo_path(&*state.database.lock().map_err(err)?, id)?;
+    let (branch, dirty, ahead, behind, status_error) = match status(&path) {
+        Ok((b, d, a, z)) => (b, d, a, z, None),
+        Err(e) => ("Unavailable".into(), 0, 0, 0, Some(e)),
+    };
+    Ok(RepoSummary {
+        id,
         branch,
         dirty,
         ahead,
         behind,
-        github_full_name,
-        ci_conclusion,
-        ci_status,
         status_error,
-    }
+    })
 }
+
 fn list_repos_impl(state: &State) -> Result<Vec<Repo>, String> {
     let db = state.database.lock().map_err(err)?;
     let mut stmt=db.prepare("SELECT id,path,name,remote_url,pinned,collection,tags,ci_status,ci_conclusion FROM repos ORDER BY pinned DESC,name COLLATE NOCASE").map_err(err)?;
@@ -455,7 +523,9 @@ fn list_repos_impl(state: &State) -> Result<Vec<Repo>, String> {
     let mut result = Vec::new();
     for row in rows.into_iter().map(Ok::<_, rusqlite::Error>) {
         let (id, path, name, remote, pin, col, tags, cs, cc) = row.map_err(err)?;
-        result.push(build_repo(id, path, name, remote, pin, col, tags, cs, cc));
+        result.push(repository_metadata(
+            id, path, name, remote, pin, col, tags, cs, cc,
+        ));
     }
     Ok(result)
 }
@@ -1072,6 +1142,7 @@ pub fn run() {
             workspace::discover_repositories,
             workspace::import_repositories,
             list_repos,
+            repo_summary,
             add_repo,
             remove_repo,
             pin_repo,
@@ -1157,6 +1228,27 @@ mod release_tests {
         std::fs::write(dir.path().join("hello.txt"), "hello").unwrap();
         assert_eq!(status(dir.path()).unwrap().1, 1);
         assert!(status(&dir.path().join("missing")).is_err());
+    }
+    #[test]
+    fn shelf_metadata_does_not_wait_for_git_and_status_is_explicit() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = initialize(&dir.path().join("test.sqlite")).unwrap();
+        db.execute(
+            "INSERT INTO repos(path,name) VALUES(?1,'missing')",
+            [dir.path().join("does-not-exist").to_string_lossy().as_ref()],
+        )
+        .unwrap();
+        let state = State {
+            database: Arc::new(Mutex::new(db)),
+            credential_service: "reponiq-test",
+        };
+        let rows = list_repos_impl(&state).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].status_pending);
+        assert!(rows[0].status_error.is_none());
+        assert!(rows[0].branch.is_empty());
+        let summary = repo_summary_impl(rows[0].id, &state).unwrap();
+        assert!(summary.status_error.is_some());
     }
     #[test]
     fn remote_credentials_never_enter_storage_or_ui() {
@@ -1347,22 +1439,31 @@ async fn background<T: Send + 'static>(
     use std::sync::atomic::Ordering;
     ACTIVE_JOBS
         .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
-            if n < 4 {
+            if n < 32 {
                 Some(n + 1)
             } else {
                 None
             }
         })
         .map_err(|_| "Workspace is busy. Try again in a moment.".to_string())?;
+    static WORKERS: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
+        std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(4)));
+    struct Admission;
+    impl Drop for Admission {
+        fn drop(&mut self) {
+            ACTIVE_JOBS.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+    let admission = Admission;
+    let permit = WORKERS
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| "Background workers are unavailable.")?;
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        struct Permit;
-        impl Drop for Permit {
-            fn drop(&mut self) {
-                ACTIVE_JOBS.fetch_sub(1, Ordering::SeqCst);
-            }
-        }
-        let _permit = Permit;
+        let _admission = admission;
+        let _permit = permit;
         job(&state)
     })
     .await
@@ -1371,6 +1472,10 @@ async fn background<T: Send + 'static>(
 #[tauri::command]
 async fn list_repos(state: tauri::State<'_, State>) -> Result<Vec<Repo>, String> {
     background(state, move |state| list_repos_impl(state)).await
+}
+#[tauri::command]
+async fn repo_summary(id: i64, state: tauri::State<'_, State>) -> Result<RepoSummary, String> {
+    background(state, move |s| repo_summary_impl(id, s)).await
 }
 #[tauri::command]
 async fn add_repo(path: String, state: tauri::State<'_, State>) -> Result<Repo, String> {

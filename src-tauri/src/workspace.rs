@@ -260,6 +260,21 @@ fn desktop(scan: &mut Scan, notes: &mut Vec<String>) {
     }
     notes.push("GitHub Desktop import uses locally recorded repository paths. Older or removed entries may be missing; review the results or scan a folder.".into());
 }
+fn saved_folder_fallback(scan: &mut Scan, notes: &mut Vec<String>, state: &State) {
+    let folder = state
+        .database
+        .lock()
+        .map_err(err)
+        .and_then(|db| settings(&db));
+    match folder {
+        Ok(Settings{default_folder:Some(folder),..}) if scan.room()=>{
+            if scan.folder(Path::new(&folder),"Default repository folder").is_ok(){notes.push("Also checked your saved repository folder. Review each source before importing.".into());}
+            else{notes.push("Your saved repository folder could not be checked. Choose a folder to scan instead.".into());}
+        },
+        Err(_)=>notes.push("Saved folder settings could not be read; they were preserved. Choose a folder to scan instead.".into()),
+        _=>{}
+    }
+}
 fn vscode(scan: &mut Scan, notes: &mut Vec<String>) {
     let Some(config) = app_config() else { return };
     let file = config.join("Code/User/globalStorage/state.vscdb");
@@ -342,7 +357,10 @@ pub async fn discover_repositories(
                     .ok_or("Choose a folder to scan.")?;
                 scan.folder(Path::new(&folder), "Folder scan")?;
             }
-            Source::GithubDesktop => desktop(&mut scan, &mut notes),
+            Source::GithubDesktop => {
+                desktop(&mut scan, &mut notes);
+                saved_folder_fallback(&mut scan, &mut notes, s);
+            }
             Source::VsCode => vscode(&mut scan, &mut notes),
         }
         scan.items
@@ -359,6 +377,52 @@ pub async fn discover_repositories(
 pub struct Imported {
     pub added: usize,
     pub remaining: Vec<String>,
+    pub failures: Vec<ImportFailure>,
+}
+#[derive(Serialize)]
+pub struct ImportFailure {
+    pub path: String,
+    pub message: String,
+}
+fn import_paths(paths: Vec<String>, s: &State) -> Result<Imported, String> {
+    let _guard = super::gitflow::MUTATIONS.lock().map_err(err)?;
+    let start = Instant::now();
+    let mut added = 0;
+    let mut remaining = vec![];
+    let mut failures = vec![];
+    for path in paths {
+        let result = if start.elapsed().as_secs() >= 20 {
+            Err(
+                "This batch reached its time limit. Import the remaining folders again."
+                    .to_string(),
+            )
+        } else {
+            super::add_repo_impl(path.clone(), s).map(|_| ())
+        };
+        match result {
+            Ok(()) => added += 1,
+            Err(error) => {
+                let message = if error.starts_with("Git ")
+                    || error.starts_with("Could not start Git")
+                    || error.starts_with("This batch")
+                {
+                    error
+                } else {
+                    "Could not read or register this folder. Check that it exists, is accessible and contains a Git repository.".into()
+                };
+                failures.push(ImportFailure {
+                    path: path.clone(),
+                    message,
+                });
+                remaining.push(path);
+            }
+        }
+    }
+    Ok(Imported {
+        added,
+        remaining,
+        failures,
+    })
 }
 #[tauri::command]
 pub async fn import_repositories(
@@ -373,25 +437,63 @@ pub async fn import_repositories(
     {
         return Err("Select up to 200 local repositories.".into());
     }
-    background(state, move |s| {
-        let _guard = super::gitflow::MUTATIONS.lock().map_err(err)?;
-        let start = Instant::now();
-        let mut added = 0;
-        let mut remaining = vec![];
-        for path in paths {
-            if start.elapsed().as_secs() >= 20 || super::add_repo_impl(path.clone(), s).is_err() {
-                remaining.push(path);
-            } else {
-                added += 1;
-            }
-        }
-        Ok(Imported { added, remaining })
-    })
-    .await
+    background(state, move |s| import_paths(paths, s)).await
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn saved_folder_fallback_finds_repos_missing_from_desktop_logs() {
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(folder.path().join("project/.git")).unwrap();
+        let db = super::super::initialize(&folder.path().join("test.sqlite")).unwrap();
+        db.execute(
+            "INSERT INTO preferences(key,value) VALUES('default-repository-folder',?1)",
+            [folder.path().to_str().unwrap()],
+        )
+        .unwrap();
+        let state = State {
+            database: std::sync::Arc::new(std::sync::Mutex::new(db)),
+            credential_service: "reponiq-test",
+        };
+        let mut scan = Scan {
+            items: vec![],
+            seen: HashSet::new(),
+            entries: 0,
+            limited: false,
+            start: Instant::now(),
+        };
+        let mut notes = vec![];
+        saved_folder_fallback(&mut scan, &mut notes, &state);
+        assert_eq!(scan.items.len(), 1);
+        assert_eq!(scan.items[0].name, "project");
+        assert_eq!(scan.items[0].source, "Default repository folder");
+        assert!(!notes.is_empty());
+    }
+    #[test]
+    fn batch_import_preserves_success_and_explains_each_failure() {
+        let folder = tempfile::tempdir().unwrap();
+        let repo = folder.path().join("project");
+        std::fs::create_dir(&repo).unwrap();
+        super::super::git(&repo, &["init", "--initial-branch=main", "--template="]).unwrap();
+        let db = super::super::initialize(&folder.path().join("test.sqlite")).unwrap();
+        let state = State {
+            database: std::sync::Arc::new(std::sync::Mutex::new(db)),
+            credential_service: "reponiq-test",
+        };
+        let valid = repo.to_str().unwrap().to_string();
+        let invalid = folder.path().join("missing").to_str().unwrap().to_string();
+        let result = import_paths(vec![valid.clone(), invalid.clone()], &state).unwrap();
+        assert_eq!(result.added, 1);
+        assert_eq!(result.remaining, vec![invalid.clone()]);
+        assert_eq!(result.failures.len(), 1);
+        assert_eq!(result.failures[0].path, invalid);
+        assert!(!result.failures[0].message.is_empty());
+        let retry = import_paths(vec![valid], &state).unwrap();
+        assert_eq!(retry.added, 1);
+        assert!(retry.remaining.is_empty());
+        assert_eq!(super::super::list_repos_impl(&state).unwrap().len(), 1);
+    }
     #[test]
     fn desktop_parser_only_accepts_known_repository_metadata() {
         assert_eq!(
