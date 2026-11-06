@@ -1,0 +1,83 @@
+name: Verify and package
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+jobs:
+  frontend:
+    name: Frontend checks
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: node scripts/release.mjs verify
+  native:
+    name: Native ${{ matrix.platform }}
+    needs: frontend
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            bundles: nsis
+            artifact: windows-x64
+          - platform: ubuntu-22.04
+            bundles: deb,rpm,appimage
+            artifact: linux-x64
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, verified 2026-11-05
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@bc2d2e71bd35c5549942babaa51a89c586b981d1 # v2.8.1
+        with:
+          workspaces: src-tauri -> target
+          cache-on-failure: false
+      - name: Linux prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev pkg-config patchelf libfuse2 xvfb x11-utils dbus-x11
+      - run: npm ci
+      - run: node scripts/release.mjs verify
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - run: npm run tauri build -- --bundles ${{ matrix.bundles }}
+      - name: Linux native startup smoke test
+        if: runner.os == 'Linux'
+        run: |
+          XDG_DATA_HOME="$RUNNER_TEMP/reponiq-smoke" NO_AT_BRIDGE=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 timeout 55s xvfb-run -a dbus-run-session -- bash scripts/smoke-linux.sh
+      - name: Collect exact installer formats and checksums
+        run: node scripts/release.mjs collect ${{ matrix.artifact }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: reponiq-${{ matrix.artifact }}
+          path: .work/release/${{ matrix.artifact }}/*
+          if-no-files-found: error
+          retention-days: 14
+# Packaging produces build artifacts only. Publishing is a separate operation
+# after candidate-bound audit and release checks; this workflow cannot publish.

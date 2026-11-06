@@ -1,0 +1,39 @@
+[package]
+name = "reponiq"
+version = "1.0.0"
+description = "Local-first Git and GitHub dashboard"
+authors = ["Reponiq Contributors"]
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "reponiq_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+chrono = "0.4"
+url = "2"
+
+tempfile = "3"
+cap-std = "=4.0.3"
+cap-fs-ext = "=4.0.3"
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tokio = { version = "1", features = ["sync", "macros"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = {version="0.61.2",features=["Wdk_Foundation","Wdk_Storage_FileSystem","Win32_Foundation","Win32_Storage_FileSystem","Win32_System_IO","Win32_System_Kernel","Win32_Security","Win32_Security_Authorization","Win32_System_Threading"]}
