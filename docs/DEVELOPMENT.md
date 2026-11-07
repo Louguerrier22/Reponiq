@@ -12,7 +12,7 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 node scripts/release.mjs verify
 ```
 
-`npm run build` checks Svelte/TypeScript and creates the frontend bundle. Native installers require `npm run tauri build -- --bundles nsis` on Windows or `npm run tauri build -- --bundles deb,rpm,appimage` on Linux. Rebuild after any source or icon change. `assets/reponiq.svg` owns the original app mark; `npm run tauri icon -- assets/reponiq.svg` regenerates platform artwork.
+`npm run build` checks Svelte/TypeScript and creates the frontend bundle. The Linux startup smoke test now requires a frontend-mounted event after rendering-frame callbacks, in addition to the window and database. Set `REPONIQ_SMOKE_BINARY` to validate the actual packaged AppImage, and test with an existing cache/profile as well as a fresh one. Native installers require `npm run tauri build -- --bundles nsis` on Windows or `npm run tauri build -- --bundles deb,rpm,appimage` on Linux. Rebuild after any source or icon change. `assets/reponiq.svg` owns the original app mark; `npm run tauri icon -- assets/reponiq.svg` regenerates platform artwork.
 
 ## Release
 

@@ -285,10 +285,76 @@ fn initialize_local(parent: &str, name: &str) -> Result<NewDirectory, String> {
     target.git(&["init", "--initial-branch=main", "--template="])?;
     Ok(target)
 }
-fn clone_local(parent: &str, name: &str, url: &str) -> Result<NewDirectory, String> {
+fn clone_local(
+    parent: &str,
+    name: &str,
+    url: &str,
+    credentials: Option<&super::git_auth::CloneAuthentication>,
+) -> Result<NewDirectory, String> {
     let target = NewDirectory::create(parent, name)?;
-    target.git(&["clone","--",url,"."]).map_err(|_|"Clone did not finish. Check system Git authentication and the destination folder before retrying; partial files are preserved.".to_string())?;
+    super::git_capture_impl(
+        &target.path,
+        &["clone", "--quiet", "--", url, "."],
+        true,
+        Some(target.dir()),
+        credentials,
+    )
+    .map_err(|error| format!("{error} Partial files are preserved; inspect the destination before retrying with a new folder name."))?;
     Ok(target)
+}
+
+fn clone_url(url: &str) -> Result<String, String> {
+    let url = url.trim();
+    let invalid = "Enter a repository URL such as https://github.com/owner/repo.git or git@host:owner/repo.git.";
+    if url.is_empty()
+        || url.len() > 32768
+        || url.chars().any(|c| c.is_control() || c.is_whitespace())
+    {
+        return Err(invalid.into());
+    }
+    // Git also accepts executable remote helpers and local paths. The URL field
+    // deliberately accepts network URLs and the conventional SSH shorthand only.
+    let parsed = if url.contains("://") {
+        url::Url::parse(url).map_err(|_| invalid)?
+    } else {
+        let (authority, path) = url.split_once(':').ok_or(invalid)?;
+        if !authority.contains('@') || authority.contains(['/', '\\', '?', '#']) || path.is_empty()
+        {
+            return Err(invalid.into());
+        }
+        url::Url::parse(&format!("ssh://{authority}/{path}")).map_err(|_| invalid)?
+    };
+    if !matches!(parsed.scheme(), "https" | "http" | "ssh" | "git")
+        || parsed.host_str().is_none()
+        || parsed.host_str().is_some_and(|host| host.starts_with('-'))
+        || parsed.username().starts_with('-')
+        || parsed.path().trim_matches('/').is_empty()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(invalid.into());
+    }
+    if parsed.password().is_some() || (parsed.scheme() != "ssh" && !parsed.username().is_empty()) {
+        return Err("Use a URL without embedded credentials. Configure your system Git credentials or SSH key instead.".into());
+    }
+    Ok(url.into())
+}
+
+#[tauri::command]
+pub async fn clone_repository_url(
+    url: String,
+    parent: String,
+    name: String,
+    state: tauri::State<'_, State>,
+) -> Result<Repo, String> {
+    let remote = clone_url(&url)?;
+    name_valid(&name)?;
+    background(state, move |s| {
+        let _guard = super::gitflow::MUTATIONS.lock().map_err(err)?;
+        let target = clone_local(&parent, &name, &remote, None)?;
+        target.register(s)
+    })
+    .await
 }
 #[tauri::command]
 pub async fn list_online_repos(
@@ -351,7 +417,7 @@ pub async fn clone_repository(
         return Err("Choose a repository.".into());
     }
     name_valid(&name)?;
-    let remote = {
+    let (remote, credentials) = {
         let _guard = oauth::ACCOUNT_LOCK.lock().await;
         let api = api(account_id, state.clone()).await?;
         api.user().await?;
@@ -360,11 +426,21 @@ pub async fn clone_repository(
             return Err("The selected repository changed. Refresh its account list.".into());
         }
         full_valid(&repo.full_name)?;
-        format!("https://github.com/{}.git", repo.full_name)
+        (
+            format!("https://github.com/{}.git", repo.full_name),
+            if repo.private {
+                super::git_auth::CloneAuthentication::Github(super::git_auth::GithubCredentials {
+                    token: api.token,
+                    full_name: repo.full_name,
+                })
+            } else {
+                super::git_auth::CloneAuthentication::PublicGithub
+            },
+        )
     };
     background(state, move |s| {
         let _guard = super::gitflow::MUTATIONS.lock().map_err(err)?;
-        let target = clone_local(&parent, &name, &remote)?;
+        let target = clone_local(&parent, &name, &remote, Some(&credentials))?;
         target.register(s)
     })
     .await
@@ -454,6 +530,56 @@ mod tests {
     use super::*;
     use crate::git;
     #[test]
+    fn clone_urls_accept_network_remotes_without_credentials() {
+        for url in [
+            "https://github.com/owner/project.git",
+            "https://gitlab.com/team/subgroup/project/",
+            "git@github.com:owner/project.git",
+            "ssh://git@example.com:2222/team/project.git",
+            "git://example.com/team/project.git",
+            "http://localhost:8000/project.git",
+        ] {
+            assert_eq!(clone_url(&format!("  {url}  ")).unwrap(), url);
+        }
+        for url in [
+            "",
+            "--upload-pack=command",
+            "ext::command",
+            "/tmp/repo",
+            "file:///tmp/repo",
+            "https://github.com/",
+            "https://github.com/owner/repo#readme",
+            "https://user:secret@github.com/owner/repo.git",
+            "https://secret@github.com/owner/repo.git",
+            "git@host:",
+            "ssh://git:secret@host/repo.git",
+            "https://host/repo\ncommand",
+        ] {
+            assert!(clone_url(url).is_err(), "{url}");
+        }
+    }
+
+    #[test]
+    fn clone_errors_distinguish_access_from_local_permissions_and_hide_stderr() {
+        assert!(crate::clone_failure("Permission denied (publickey).", false).contains("SSH key"));
+        assert!(crate::clone_failure(
+            "fatal: Authentication failed for https://secret@github.com/owner/project",
+            true
+        )
+        .contains("Reconnect"));
+        assert!(crate::clone_failure(
+            "fatal: could not create work tree dir: Permission denied",
+            false
+        )
+        .contains("writable"));
+        assert!(crate::clone_failure(
+            "fatal: unable to access https://secret@host/repo: Could not resolve host",
+            false
+        )
+        .contains("connection"));
+        assert!(!crate::clone_failure("fatal: https://secret@host/", false).contains("secret"));
+    }
+    #[test]
     fn git_execution_does_not_select_an_executable_from_the_new_repository() {
         let parent = tempfile::tempdir().unwrap();
         let target = initialize_local(parent.path().to_str().unwrap(), "project").unwrap();
@@ -475,6 +601,35 @@ mod tests {
     fn provider_organization_shape_does_not_require_a_type_field() {
         let owner: Owner = serde_json::from_str(r#"{"login":"example-org","id":42}"#).unwrap();
         assert_eq!(owner.login, "example-org");
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn group_writable_workspaces_can_clone_into_a_private_new_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(parent.path(), std::fs::Permissions::from_mode(0o775)).unwrap();
+        let source = initialize_local(parent.path().to_str().unwrap(), "source").unwrap();
+        let cloned = clone_local(
+            parent.path().to_str().unwrap(),
+            "copy",
+            source.path.to_str().unwrap(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::metadata(&cloned.path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert!(cloned
+            .git(&["rev-parse", "--is-inside-work-tree"])
+            .unwrap()
+            .contains("true"));
+        std::fs::set_permissions(parent.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(NewDirectory::create(parent.path().to_str().unwrap(), "unsafe").is_err());
     }
     #[cfg(target_os = "linux")]
     #[test]
@@ -549,17 +704,69 @@ mod tests {
             p.path().to_str().unwrap(),
             "copy",
             p.path().join("source").to_str().unwrap(),
+            None,
         )
         .unwrap();
         assert_eq!(
             git(&cloned.path, &["rev-parse", "HEAD"]).unwrap(),
             git(&source, &["rev-parse", "HEAD"]).unwrap()
         );
+        assert_eq!(
+            std::fs::read_to_string(cloned.path.join("readme.txt")).unwrap(),
+            "example"
+        );
+        assert_eq!(
+            git(&cloned.path, &["remote", "get-url", "origin"]).unwrap(),
+            source.to_str().unwrap()
+        );
+        let state = State {
+            database: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::initialize(&p.path().join("workspace.sqlite")).unwrap(),
+            )),
+            credential_service: "reponiq-test",
+        };
+        let registered = cloned.register(&state).unwrap();
+        assert_eq!(registered.name, "copy");
+        assert_eq!(registered.branch, "main");
+        assert_eq!(registered.dirty, 0);
+        let credentials = super::super::git_auth::CloneAuthentication::Github(
+            super::super::git_auth::GithubCredentials {
+                token: "fixture-secret".into(),
+                full_name: "owner/project".into(),
+            },
+        );
+        let authenticated = clone_local(
+            p.path().to_str().unwrap(),
+            "account-copy",
+            source.to_str().unwrap(),
+            Some(&credentials),
+        )
+        .unwrap();
+        let config = std::fs::read_to_string(authenticated.path.join(".git/config")).unwrap();
+        assert!(!config.contains("fixture-secret"));
+        assert!(!config.contains("credential"));
+        assert!(!config.contains("extraHeader"));
         assert!(clone_local(
             p.path().to_str().unwrap(),
             "copy",
-            p.path().join("source").to_str().unwrap()
+            p.path().join("source").to_str().unwrap(),
+            None,
         )
         .is_err());
+    }
+
+    #[test]
+    fn failed_clones_preserve_the_reason_and_do_not_register_a_repository() {
+        let p = tempfile::tempdir().unwrap();
+        let result = clone_local(
+            p.path().to_str().unwrap(),
+            "copy",
+            p.path().join("missing").to_str().unwrap(),
+            None,
+        );
+        let error = result.err().unwrap();
+        assert!(error.contains("Partial files are preserved"));
+        assert!(p.path().join("copy").is_dir());
+        assert!(!p.path().join("copy/.git").exists());
     }
 }

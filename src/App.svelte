@@ -7,6 +7,7 @@
   import WorkspaceFolder from './lib/WorkspaceFolder.svelte';
   import ImportRepositories from './lib/ImportRepositories.svelte';
   import Walkthrough from './lib/Walkthrough.svelte';
+  import LiveLogs from './lib/LiveLogs.svelte';
   import PlatformIcon from './lib/PlatformIcon.svelte';
   import { remoteInfo } from './lib/platform';
   import TokenInput from './lib/TokenInput.svelte';
@@ -43,6 +44,7 @@
 
   let showAdd = $state(false);
   let showWalkthrough = $state(false);
+  let showLiveLogs = $state(false);
   let workspace=$state<WorkspaceSettings>({default_folder:null,auto_detect:false,setup_complete:false});
   let showSetup=$state(false),setupBusy=$state(false),showImport=$state(false);
   let found=$state<Discovery|null>(null),importInitial=$state<Discovery|null>(null);
@@ -403,6 +405,7 @@
 
         <div class="panel workspace-settings"><h2>Repository folder</h2><WorkspaceFolder settings={workspace} onsaved={settings=>{workspace=settings;++discoverySequence;found=null;discoveryError='';void scanDefault();}}/></div>
         <div class="panel walkthrough-settings"><div><strong>A quick tour</strong><p>Revisit the basics whenever you need them.</p></div><button class="secondary" onclick={()=>showWalkthrough=true}>Open walkthrough</button></div>
+        <div class="panel walkthrough-settings"><div><strong>Live logs</strong><p>View runtime activity, Git diagnostics, and error details.</p></div><button class="secondary" onclick={()=>showLiveLogs=true}>Open live logs</button></div>
 
       {:else if view==='activity'}
 
@@ -461,6 +464,7 @@
 {#if pendingGit}<Modal label={pendingGit.title} onclose={()=>pendingGit=null}><h2>{pendingGit.title}</h2><p class="confirm-description">{pendingGit.description}</p><p class="confirm-context">{repos.find(repo=>repo.id===pendingGit!.id)?.name} · {pendingGit.expected.branch}</p><div class="modal-actions"><button class="secondary" onclick={()=>pendingGit=null}>Cancel</button><button class="primary" onclick={executePendingGit}>Confirm</button></div></Modal>{/if}
 
 {#if showWalkthrough}<Walkthrough hasRepo={repos.length>0} prepare={prepareTour} onclose={()=>showWalkthrough=false}/>{/if}
+{#if showLiveLogs}<LiveLogs onclose={()=>showLiveLogs=false}/>{/if}
 
 {#if showSetup}<Modal label="Set up repositories" canClose={!setupBusy} onclose={skipSetup}><h2>Choose your repository folder</h2><p>You can change this later in Settings.</p><WorkspaceFolder settings={workspace} initial bind:busy={setupBusy} onsaved={workspaceSaved}/></Modal>{/if}
 {#if showImport}<ImportRepositories initial={importInitial} defaultFolder={workspace.default_folder} onclose={()=>{showImport=false;void load();}} onimported={imported}/>{/if}

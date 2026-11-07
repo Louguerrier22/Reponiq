@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from './diagnostics';
 import { remoteInfo } from './platform';
 export type Repo = { id: number; path: string; name: string; remote_url: string | null; pinned: boolean; collection: string | null; tags: string[]; branch: string; dirty: number; ahead: number; behind: number; github_full_name: string | null; ci_conclusion: string | null; ci_status: string | null; status_error?: string | null;status_pending?:boolean };
 export type RepoSummary = Pick<Repo,'id'|'branch'|'dirty'|'ahead'|'behind'|'status_error'>;
@@ -32,6 +32,7 @@ export const api = {
   onlineRepos: (accountId:number,page=1) => invoke<Page<OnlineRepo>>('list_online_repos',{accountId,page}),
   repositoryOwners: (accountId:number,page=1) => invoke<Page<RepositoryOwner> & {warning:string|null}>('repository_owners',{accountId,page}),
   cloneRepository: (accountId:number,repositoryId:number,parent:string,name:string) => invoke<Repo>('clone_repository',{accountId,repositoryId,parent,name}),
+  cloneRepositoryUrl: (url:string,parent:string,name:string) => invoke<Repo>('clone_repository_url',{url,parent,name}),
   createRepository: (input:{parent:string;name:string;account_id:number|null;owner:string|null;private:boolean}) => invoke<CreatedRepo>('create_repository',{input}),
   workspaceSettings: () => invoke<WorkspaceSettings>('workspace_settings'),
   saveWorkspaceSettings: (input:WorkspaceSettings) => invoke<WorkspaceSettings>('save_workspace_settings',{input}),

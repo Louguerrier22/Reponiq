@@ -3052,9 +3052,9 @@ Source: https://crates.io/crates/zvariant_utils/4.2.0
 Authors: Zeeshan Ali Khan <zeeshanak@gnome.org>; turbocooler <turbocooler@cocaine.ninja>
 License texts: 30fefc3a7d6a0041
 
-@esbuild/win32-x64 0.25.12
+@esbuild/linux-x64 0.25.12
 License: MIT
-Source: https://registry.npmjs.org/@esbuild/win32-x64/-/win32-x64-0.25.12.tgz
+Source: https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-0.25.12.tgz
 License texts: See versioned upstream source.
 
 @jridgewell/gen-mapping 0.3.13
@@ -3082,14 +3082,14 @@ License: MIT
 Source: https://registry.npmjs.org/@jridgewell/trace-mapping/-/trace-mapping-0.3.31.tgz
 License texts: 928e59141142e3b9
 
-@rollup/rollup-win32-x64-gnu 4.67.5
+@rollup/rollup-linux-x64-gnu 4.67.5
 License: MIT
-Source: https://registry.npmjs.org/@rollup/rollup-win32-x64-gnu/-/rollup-win32-x64-gnu-4.67.5.tgz
+Source: https://registry.npmjs.org/@rollup/rollup-linux-x64-gnu/-/rollup-linux-x64-gnu-4.67.5.tgz
 License texts: See versioned upstream source.
 
-@rollup/rollup-win32-x64-msvc 4.67.5
+@rollup/rollup-linux-x64-musl 4.67.5
 License: MIT
-Source: https://registry.npmjs.org/@rollup/rollup-win32-x64-msvc/-/rollup-win32-x64-msvc-4.67.5.tgz
+Source: https://registry.npmjs.org/@rollup/rollup-linux-x64-musl/-/rollup-linux-x64-musl-4.67.5.tgz
 License texts: See versioned upstream source.
 
 @standard-schema/spec 1.1.0
@@ -3127,9 +3127,14 @@ License: Apache-2.0 OR MIT
 Source: https://registry.npmjs.org/@tauri-apps/cli/-/cli-2.12.4.tgz
 License texts: 4bf96504d6e83ce5, 89ff9689dcf9dd53
 
-@tauri-apps/cli-win32-x64-msvc 2.12.4
+@tauri-apps/cli-linux-x64-gnu 2.12.4
 License: Apache-2.0 OR MIT
-Source: https://registry.npmjs.org/@tauri-apps/cli-win32-x64-msvc/-/cli-win32-x64-msvc-2.12.4.tgz
+Source: https://registry.npmjs.org/@tauri-apps/cli-linux-x64-gnu/-/cli-linux-x64-gnu-2.12.4.tgz
+License texts: See versioned upstream source.
+
+@tauri-apps/cli-linux-x64-musl 2.12.4
+License: Apache-2.0 OR MIT
+Source: https://registry.npmjs.org/@tauri-apps/cli-linux-x64-musl/-/cli-linux-x64-musl-2.12.4.tgz
 License texts: See versioned upstream source.
 
 @types/chai 5.2.3

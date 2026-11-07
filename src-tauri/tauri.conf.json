@@ -25,6 +25,13 @@
     }
   },
   "bundle": {
+    "linux": {
+      "appimage": {
+        "files": {
+          "/usr/share/reponiq/fontconfig.conf": "../assets/fontconfig/reponiq.conf"
+        }
+      }
+    },
     "active": true,
     "targets": "all",
     "icon": [

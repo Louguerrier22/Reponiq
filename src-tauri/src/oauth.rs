@@ -493,11 +493,18 @@ pub(super) async fn account_token(
         ))
     })
     .await?;
+    if let Some(token) = &raw {
+        super::diagnostics::remember_secret(token);
+    }
     let Some(metadata) = metadata else {
         return raw.ok_or("No saved token. Reconnect this GitHub account.".into());
     };
     let credential: Credential = serde_json::from_str(&metadata)
         .map_err(|_| "Saved sign-in data is not supported. Reconnect this GitHub account.")?;
+    super::diagnostics::remember_secret(&credential.access_token);
+    if let Some(refresh) = &credential.refresh_token {
+        super::diagnostics::remember_secret(refresh);
+    }
     credential.validate_binding(&login, created_at, raw.as_deref())?;
     if !credential
         .expires_at
@@ -530,6 +537,7 @@ pub(super) async fn account_token(
     credential.bind_account(&login, created_at);
     credential.previous_access_token = raw;
     let token = credential.access_token.clone();
+    super::diagnostics::remember_secret(&token);
     background(state, move |state| {
         // Persist the rotated refresh token first: it is the recovery authority if
         // updating the legacy access-token mirror subsequently fails.

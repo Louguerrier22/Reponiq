@@ -2,7 +2,7 @@
 
 [Documentation](README.md) · [Install](INSTALLATION.md) · [Troubleshooting](TROUBLESHOOTING.md)
 
-This guide describes Reponiq 1.0.1. On first launch, choose a default repository folder or skip setup. A short walkthrough then introduces repositories, commits and remote work. Skip or finish it at any time; reopen it from the bottom of Settings.
+This guide describes Reponiq 1.0.1. On first launch, choose a default repository folder or skip setup. A short walkthrough then introduces repositories, commits and remote work. Skip or finish it at any time; reopen it from Settings.
 
 ## Repositories and organization
 
@@ -10,7 +10,7 @@ Choose **Add repository** and select one of three paths.
 
 **Add from folder** opens an existing local repository. Browse uses the operating system's folder dialog; cancel preserves the field. Registration does not move or upload code.
 
-**Clone** lists GitHub repositories under your connected accounts. Expand an account, choose a repository, then choose a parent folder and local folder name. Lists are paged at 25 items; search filters the current page. Clone uses system Git credentials, which may differ from the selected API account. Existing destination folders are refused. Failed clones preserve partial files; inspect that folder before retrying.
+**Clone** offers **GitHub accounts** and **Repository URL**. Expand an account and choose a repository, or paste an HTTPS or SSH clone URL from any Git host. URL cloning works without connecting an account and suggests the local folder name. Choose a parent folder and local folder name, then clone. Account lists are paged at 25 items; search filters the current page. Public repositories selected from the account list clone without authentication; private repositories use that selected GitHub account. URL cloning uses system Git credentials or your SSH key. Existing destination folders are refused. Clones can run for up to 15 minutes. Failed clones preserve partial files; inspect that folder before retrying with a new folder name.
 
 **Create** starts an empty local repository on main. Choose Local only, or a connected GitHub account and an available personal/organization owner. GitHub creation defaults to Private and creates an empty remote; it does not upload source or push a commit. Organization policy and token permissions remain authoritative. Choose a new folder name inside an existing parent folder. If remote setup fails after local creation, the local repository stays registered and the app reports the partial result. Check GitHub before retrying remote creation.
 
@@ -63,3 +63,11 @@ Sync GitHub manually retrieves recent Actions runs. It is not a complete GitHub 
 Windows stores metadata at %APPDATA%\Reponiq\reponiq.sqlite. Linux uses ${XDG_DATA_HOME:-~/.local/share}/reponiq/reponiq.sqlite. Existing ForgeDesk installations continue using ForgeDesk/forgedesk.sqlite (Windows) or forgedesk/forgedesk.sqlite (Linux), with the original credential namespace. If both databases exist, the legacy database takes priority; they are not merged automatically. Back up the database separately from the OS credential store.
 
 Removing a repository removes only its local workspace record. Saved activity may still contain names or paths. The tray offers Show and Quit; there is no guaranteed close-to-tray background service. Git operations have deadlines and bounded output; inspect repository state before retrying interrupted mutations.
+
+## Live logs
+
+Open **Settings > Live logs**, below **A quick tour**, to view application activity and error details. The viewer includes command names and durations, Git stderr when a command finishes, GitHub HTTP status, frontend console messages and uncaught errors, and native panics with available stack information. Command arguments, successful API response bodies, and Git stdout/diffs are not automatically logged.
+
+Search messages or sources and filter by severity. **Pause** freezes the viewer while collection continues; **Resume** catches up. **Copy logs** and **Download logs** use the visible, filtered entries. Download opens a native save dialog. **Clear logs** clears retained and saved diagnostic history.
+
+The viewer retains the latest 2,000 entries. Logs also persist next to the workspace database in `logs/reponiq.log` and `logs/reponiq.previous.log`, with each file bounded to 2 MiB. History is restored after restart. The viewer displays the current file path and any logging storage error. Common credential fields, credential-bearing URL components, known account secrets, and recognizable token formats are redacted before storage. Review local paths and private details before sharing a log. Logs stay on your device until you copy or export them.

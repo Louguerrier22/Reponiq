@@ -118,10 +118,12 @@ struct CommitFiles {
 pub(super) async fn json_response<T: DeserializeOwned>(
     request: reqwest::RequestBuilder,
 ) -> Result<(T, bool), String> {
-    let mut response = request.send().await.map_err(|_| {
+    let mut response = request.send().await.map_err(|error| {
+        log::error!(target: "reponiq::github", "Request failed: {error}");
         "Could not reach GitHub. Check your connection and refresh before retrying an action."
             .to_string()
     })?;
+    log::debug!(target: "reponiq::github", "HTTP {} · {}", response.status(), response.url());
     if !response.status().is_success() {
         return Err(match response.status().as_u16(){401=>"GitHub sign-in expired. Reconnect this account.",403=>"GitHub denied this action. Check token permissions, organization policy, branch protection, or API rate limits.",404=>"GitHub could not find this repository or pull request for the selected account.",405=>"GitHub cannot merge this pull request in its current state.",409=>"The pull request changed or has conflicts. Refresh and review it again.",422=>"GitHub rejected this action. Check the branch, review permissions, and whether a pull request already exists.",429=>"GitHub rate limit reached. Wait before trying again.",_=>"GitHub could not complete the action. Refresh before retrying."}.into());
     }

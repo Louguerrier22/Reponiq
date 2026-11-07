@@ -13,9 +13,12 @@ use tauri::{
 mod catalog;
 mod conflict_file;
 mod create_directory;
+mod diagnostics;
+mod git_auth;
 mod gitflow;
 mod oauth;
 mod pulls;
+mod startup;
 mod storage;
 mod workspace;
 
@@ -193,22 +196,37 @@ fn git_exact(path: &Path, args: &[&str]) -> Result<String, String> {
     git_capture(path, args, false)
 }
 fn git_capture(path: &Path, args: &[&str], trim: bool) -> Result<String, String> {
-    git_capture_impl(path, args, trim, None)
+    git_capture_impl(path, args, trim, None, None)
 }
 fn git_bound(path: &Path, directory: &cap_std::fs::Dir, args: &[&str]) -> Result<String, String> {
-    git_capture_impl(path, args, true, Some(directory))
+    git_capture_impl(path, args, true, Some(directory), None)
 }
 fn git_capture_impl(
     path: &Path,
     args: &[&str],
     trim: bool,
     directory: Option<&cap_std::fs::Dir>,
+    credentials: Option<&git_auth::CloneAuthentication>,
 ) -> Result<String, String> {
     use std::io::{Read, Seek, SeekFrom};
     use std::process::Stdio;
+    let mut arguments = args.iter().copied();
+    let mut operation = "command";
+    while let Some(argument) = arguments.next() {
+        if argument == "-c" {
+            arguments.next();
+        } else if !argument.starts_with('-') {
+            operation = argument;
+            break;
+        }
+    }
+    log::debug!(target: "reponiq::git", "{operation} started in {}", path.display());
     let mut stdout = tempfile::tempfile().map_err(err)?;
     let mut stderr = tempfile::tempfile().map_err(err)?;
     let mut command = Command::new(git_binary()?);
+    if let Some(credentials) = credentials {
+        credentials.configure(&mut command);
+    }
     if let Some(directory) = directory {
         #[cfg(target_os = "linux")]
         {
@@ -245,13 +263,17 @@ fn git_capture_impl(
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-    let mut child = command
-        .spawn()
-        .map_err(|_| "Could not start Git. Install Git and restart Reponiq.".to_string())?;
+    let mut child = command.spawn().map_err(|error| {
+        log::error!(target: "reponiq::git", "{operation} could not start: {error}");
+        "Could not start Git. Install Git and restart Reponiq.".to_string()
+    })?;
     let start = std::time::Instant::now();
-    let deadline = if args
+    let cloning = args.first() == Some(&"clone");
+    let deadline = if cloning {
+        15 * 60
+    } else if args
         .first()
-        .is_some_and(|verb| matches!(*verb, "fetch" | "pull" | "push" | "clone"))
+        .is_some_and(|verb| matches!(*verb, "fetch" | "pull" | "push"))
     {
         60
     } else {
@@ -268,18 +290,34 @@ fn git_capture_impl(
         {
             let _ = child.kill();
             let _ = child.wait();
+            log::error!(target: "reponiq::git", "{operation} stopped after {} ms: time/output limit reached", start.elapsed().as_millis());
+            if cloning {
+                return Err("Clone exceeded its 15-minute time limit or output limit. Check the connection and destination folder before retrying.".into());
+            }
             return Err("Git exceeded its time or output limit. Check the repository before retrying an action.".into());
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     };
+    stderr.seek(SeekFrom::Start(0)).map_err(err)?;
+    let mut diagnostic = String::new();
+    stderr.take(65536).read_to_string(&mut diagnostic).ok();
     if !status.success() {
-        stderr.seek(SeekFrom::Start(0)).map_err(err)?;
-        let mut diagnostic = String::new();
-        stderr.take(65536).read_to_string(&mut diagnostic).ok();
+        log::error!(target: "reponiq::git", "{operation} failed ({status}) after {} ms\n{diagnostic}", start.elapsed().as_millis());
         if diagnostic.contains("detected dubious ownership") {
             return Err("Git does not trust this folder's ownership. Check its owner and approve only this trusted repository in Git before importing.".into());
         }
+        if cloning {
+            return Err(clone_failure(
+                &diagnostic,
+                credentials.is_some_and(git_auth::CloneAuthentication::uses_account),
+            )
+            .into());
+        }
         return Err(format!("Git exited with status {}. Check repository access, branch state, and system Git credentials.",status.code().unwrap_or(-1)));
+    }
+    log::debug!(target: "reponiq::git", "{operation} completed in {} ms", start.elapsed().as_millis());
+    if !diagnostic.trim().is_empty() {
+        log::info!(target: "reponiq::git", "{operation} output:\n{diagnostic}");
     }
     if stdout.metadata().map_err(err)?.len() > MAX_OUTPUT {
         return Err("Git output is too large. Use your Git terminal for the full output.".into());
@@ -297,6 +335,40 @@ fn git_capture_impl(
     } else {
         String::from_utf8(bytes)
             .map_err(|_| "This Git output is not UTF-8 text. Use your external Git tools.".into())
+    }
+}
+
+fn clone_failure(diagnostic: &str, account: bool) -> &'static str {
+    // Classify stderr without returning it: Git may print credentials or URLs.
+    let diagnostic = diagnostic.to_ascii_lowercase();
+    if diagnostic.contains("authentication failed")
+        || diagnostic.contains("could not read username")
+        || diagnostic.contains("could not read password")
+        || diagnostic.contains("repository not found")
+        || diagnostic.contains("permission denied (publickey")
+        || diagnostic.contains("access denied")
+        || diagnostic.contains("error: 403")
+        || diagnostic.contains("error: 401")
+    {
+        if account {
+            "GitHub refused access. Reconnect the selected account with repository access and check any organization SSO requirements."
+        } else {
+            "Git could not authenticate or find the repository. Check the URL and your system Git credentials or SSH key."
+        }
+    } else if diagnostic.contains("permission denied") || diagnostic.contains("access is denied") {
+        "Git could not write to the destination. Choose a writable parent folder and check its permissions."
+    } else if diagnostic.contains("could not resolve host")
+        || diagnostic.contains("failed to connect")
+        || diagnostic.contains("unable to access")
+        || diagnostic.contains("connection timed out")
+    {
+        "Git could not reach the repository. Check your connection, proxy settings, and repository URL."
+    } else if diagnostic.contains("no space left") || diagnostic.contains("disk full") {
+        "There is not enough disk space to clone this repository."
+    } else if diagnostic.contains("checkout failed") {
+        "Git downloaded the repository but could not check out its files. Inspect the destination for file-name or permission problems."
+    } else {
+        "Git could not finish cloning. Check repository access, system Git settings, and the destination folder."
     }
 }
 
@@ -928,6 +1000,7 @@ async fn connect_account(
     if token.trim().is_empty() || token.len() > 4096 {
         return Err("Enter a valid GitHub token.".into());
     }
+    diagnostics::remember_secret(&token);
     let client = gh_client()?;
     let user: GithubUser = gh_get(&client, &format!("{host}/user"), &token)
         .await?
@@ -1083,6 +1156,14 @@ async fn sync_account(id: i64, state: tauri::State<'_, State>) -> Result<String,
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let fontconfig = startup::configure_font_cache();
+    diagnostics::init();
+    if let Some(path) = fontconfig {
+        log::info!(
+            "Using AppImage fonts with an isolated cache: {}",
+            path.display()
+        );
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -1093,6 +1174,13 @@ pub fn run() {
                 cfg!(target_os = "windows"),
             )
             .map_err(std::io::Error::other)?;
+            if let Some(parent) = storage.database.parent() {
+                diagnostics::attach(&parent.join("logs"));
+            }
+            log::info!(
+                "Opening workspace database at {}",
+                storage.database.display()
+            );
             let db = initialize(&storage.database).map_err(std::io::Error::other)?;
             app.manage(State {
                 database: Arc::new(Mutex::new(db)),
@@ -1128,14 +1216,20 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+            log::info!("Workspace, window, and tray initialized");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            diagnostics::diagnostics_snapshot,
+            diagnostics::diagnostics_write,
+            diagnostics::diagnostics_clear,
+            diagnostics::diagnostics_export,
             walkthrough_seen,
             finish_walkthrough,
             catalog::list_online_repos,
             catalog::repository_owners,
             catalog::clone_repository,
+            catalog::clone_repository_url,
             catalog::create_repository,
             workspace::workspace_settings,
             workspace::save_workspace_settings,
@@ -1464,7 +1558,11 @@ async fn background<T: Send + 'static>(
     tauri::async_runtime::spawn_blocking(move || {
         let _admission = admission;
         let _permit = permit;
-        job(&state)
+        let result = job(&state);
+        if let Err(error) = &result {
+            log::error!(target: "reponiq::worker", "{error}");
+        }
+        result
     })
     .await
     .map_err(|_| "Background operation could not finish".to_string())?

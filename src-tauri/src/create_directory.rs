@@ -194,9 +194,11 @@ pub(super) fn create(parent: &Dir, name: &str) -> Result<Dir, String> {
     let user = std::fs::metadata("/proc/self")
         .map_err(|_| "Could not verify the current user.")?
         .uid();
-    if metadata.uid() != user || metadata.mode() & 0o022 != 0 {
+    // A user's normal workspace can be group-writable (for example with umask
+    // 0002). The new leaf is private; verify its ownership before using it.
+    if metadata.uid() != user || metadata.mode() & 0o002 != 0 {
         return Err(
-            "Choose a repository folder owned by your account that other users cannot modify."
+            "Choose a repository folder owned by your account that is not writable by everyone."
                 .into(),
         );
     }
@@ -205,9 +207,23 @@ pub(super) fn create(parent: &Dir, name: &str) -> Result<Dir, String> {
     parent
         .create_dir_with(name, &options)
         .map_err(|_| "The destination exists or cannot be created. Choose a new folder name.")?;
-    parent
+    let child = parent
         .open_dir_nofollow(name)
-        .map_err(|_| "Could not retain the new repository folder.".into())
+        .map_err(|_| "Could not retain the new repository folder.")?;
+    let held = child
+        .dir_metadata()
+        .map_err(|_| "Could not check the new repository folder.")?;
+    let current = parent
+        .symlink_metadata(name)
+        .map_err(|_| "The destination changed while creating the repository.")?;
+    if held.uid() != user
+        || held.mode() & 0o077 != 0
+        || held.dev() != current.dev()
+        || held.ino() != current.ino()
+    {
+        return Err("The destination changed or is not private. Choose another folder.".into());
+    }
+    Ok(child)
 }
 #[cfg(not(any(windows, target_os = "linux")))]
 pub(super) fn create(_parent: &Dir, _name: &str) -> Result<Dir, String> {
