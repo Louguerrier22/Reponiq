@@ -121,11 +121,14 @@
     const scope=composeScope;
     busy=true; error='';
     try {
-      const result=await api.createPull(id,account,input);
-      notice='Created pull request #'+result.number;
+      const {pull,matches_comparison}=await api.createPull(id,account,input);
+      notice=matches_comparison?'Created pull request #'+pull.number:'';
       showCreate=false; title=''; body='';
-      if(scope)await saveDraft(scope,null,persistentDrafts).catch(reason=>{error=String(reason);});
-      await loadList(1); await choose(result);
+      let draftError='';
+      if(scope&&matches_comparison)await saveDraft(scope,null,persistentDrafts).catch(reason=>{draftError=String(reason);});
+      await loadList(1); await choose(pull);
+      if(!matches_comparison)error=`GitHub created pull request #${pull.number} after a branch changed. Review the new pull request before continuing.`;
+      else if(draftError)error=draftError;
     } catch(reason) {
       comparison=null;
       error=String(reason);

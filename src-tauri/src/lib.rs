@@ -634,6 +634,7 @@ fn repository_metadata(
 struct RepoSummary {
     id: i64,
     path: String,
+    registration: Option<String>,
     branch: String,
     dirty: usize,
     ahead: i64,
@@ -643,7 +644,10 @@ struct RepoSummary {
     missing: bool,
 }
 fn repo_summary_impl(id: i64, state: &State) -> Result<RepoSummary, String> {
-    let path = repo_path(&*state.database.lock().map_err(err)?, id)?;
+    let (path, registration) = {
+        let db = state.database.lock().map_err(err)?;
+        (repo_path(&db, id)?, workflow::registration(&db, id)?)
+    };
     let missing = matches!(path.try_exists(), Ok(false));
     let result = if missing {
         Err("The repository folder is missing.".into())
@@ -670,6 +674,7 @@ fn repo_summary_impl(id: i64, state: &State) -> Result<RepoSummary, String> {
     let summary = RepoSummary {
         id,
         path: path.to_string_lossy().into_owned(),
+        registration,
         branch,
         dirty,
         ahead,
@@ -930,7 +935,7 @@ fn git_action_impl(
     let _repository_guard = repository.try_lock().map_err(|_| {
         "This repository is fetching in the background. Try again when the fetch finishes."
     })?;
-    if let Some(expected) = expected {
+    if let Some(expected) = &expected {
         if let Some(token) = &expected.registration {
             if workflow::registration(&*state.database.lock().map_err(err)?, id)?.as_ref()
                 != Some(token)
@@ -978,7 +983,7 @@ fn git_action_impl(
         "merge_upstream" if args.is_empty() => {
             gitflow::pull_recording_fetch(&path, true, mark_fetch)
         }
-        "push" if args.is_empty() => gitflow::push_recording(&path, |head| {
+        "push" if args.is_empty() => gitflow::push_recording(&path, expected.as_ref(), |head| {
             if let Ok(db) = state.database.lock() {
                 if repo_path(&db, id).is_ok_and(|current| current == path) {
                     let _ = workflow::record_publication(&db, id, head);
@@ -1013,7 +1018,11 @@ fn git_action_impl(
             gitflow::resolve_file(&path, &args[0], &args[1], &args[2])
         }
         "resolve_delete" if args.len() == 2 => gitflow::resolve_delete(&path, &args[0], &args[1]),
-        "commit" if args.len() == 1 && !args[0].trim().is_empty() && args[0].len() <= 500 => {
+        "commit"
+            if args.len() == 1
+                && !args[0].trim().is_empty()
+                && args[0].encode_utf16().count() <= 500 =>
+        {
             let s = gitflow::state(&path)?;
             if s.operation.is_some() || !s.conflicts.is_empty() {
                 return Err("Use Continue to finish the current Git operation.".into());
@@ -1023,7 +1032,11 @@ fn git_action_impl(
             }
             git(&path, &["-c", "core.editor=true", "commit", "-m", &args[0]])
         }
-        "commit_paths" if args.len() > 1 && !args[0].trim().is_empty() && args[0].len() <= 500 => {
+        "commit_paths"
+            if args.len() > 1
+                && !args[0].trim().is_empty()
+                && args[0].encode_utf16().count() <= 500 =>
+        {
             gitflow::commit_paths(&path, &args[0], &args[1..])
         }
         "checkout" if args.len() == 1 => {
@@ -1691,11 +1704,21 @@ mod release_tests {
         git(path, &["mv", "initial", "renamed file"]).unwrap();
         std::fs::write(path.join("--literal"), "new").unwrap();
         assert!(commit(&["Stale selection", "missing"]).is_err());
-        git(path, &["config", "user.name", ""]).unwrap();
-        let before = git(path, &["status", "--porcelain=v1"]).unwrap();
+        git(path, &["config", "commit.gpgsign", "true"]).unwrap();
+        git(path, &["config", "gpg.format", "openpgp"]).unwrap();
+        git(
+            path,
+            &["config", "gpg.program", "nonexistent-reponiq-fixture-gpg"],
+        )
+        .unwrap();
+        let before = git(path, &["diff", "--cached"]).unwrap();
         assert!(commit(&["Failed commit", "renamed file", "--literal"]).is_err());
-        assert_eq!(git(path, &["status", "--porcelain=v1"]).unwrap(), before);
-        git(path, &["config", "user.name", "Fixture"]).unwrap();
+        assert_eq!(git(path, &["diff", "--cached"]).unwrap(), before);
+        assert_eq!(
+            std::fs::read_to_string(path.join("--literal")).unwrap(),
+            "new"
+        );
+        git(path, &["config", "commit.gpgsign", "false"]).unwrap();
         commit(&["Rename and new file", "renamed file", "--literal"]).unwrap();
         assert!(git(path, &["status", "--porcelain"]).unwrap().is_empty());
         assert_eq!(
@@ -1703,6 +1726,20 @@ mod release_tests {
             "updated"
         );
         assert!(git(path, &["cat-file", "-e", "HEAD:initial"]).is_err());
+
+        std::fs::create_dir(path.join("layout")).unwrap();
+        std::fs::write(path.join("layout/item.txt"), "nested").unwrap();
+        commit(&["Add layout", "layout/item.txt"]).unwrap();
+        std::fs::remove_file(path.join("layout/item.txt")).unwrap();
+        std::fs::remove_dir(path.join("layout")).unwrap();
+        std::fs::write(path.join("layout"), "replacement").unwrap();
+        git(path, &["add", "-A"]).unwrap();
+        let before = git(path, &["rev-parse", "HEAD"]).unwrap();
+        assert!(commit(&["Incomplete replacement", "layout"])
+            .unwrap_err()
+            .contains("affected folder"));
+        assert_eq!(git(path, &["rev-parse", "HEAD"]).unwrap(), before);
+        commit(&["Replace layout", "layout", "layout/item.txt"]).unwrap();
     }
     #[test]
     fn selected_diff_preserves_literal_flag_filename_and_does_not_write_activity() {

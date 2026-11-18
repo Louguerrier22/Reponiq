@@ -216,17 +216,40 @@ pub(super) fn pull_recording_fetch(
 }
 #[cfg(test)]
 pub(super) fn push(path: &Path) -> Result<String, String> {
-    push_recording(path, |_| {})
+    push_recording(path, None, |_| {})
 }
-pub(super) fn push_recording(path: &Path, published: impl FnOnce(&str)) -> Result<String, String> {
-    let s = state(path)?;
-    require_clean(&s)?;
-    if s.upstream_gone {
+pub(super) fn push_recording(
+    path: &Path,
+    expected: Option<&super::GitExpectation>,
+    published: impl FnOnce(&str),
+) -> Result<String, String> {
+    let original = state(path)?;
+    let (branch, head) = expected
+        .map(|expected| (&expected.branch, &expected.head))
+        .unwrap_or((&original.branch, &original.head));
+    if original.branch != *branch || original.head != *head {
+        return Err(
+            "The branch or commit changed. Review the current branch before pushing.".into(),
+        );
+    }
+    require_clean(&original)?;
+    if original.upstream_gone {
         return Err("The upstream branch was deleted. Create a new branch before publishing; Reponiq will not recreate it silently.".into());
     }
-    let remote = remote(&s)?.to_string();
-    git(path, &["fetch", "--prune", &remote])?;
+    let destination = remote(&original)?.to_string();
+    git(path, &["fetch", "--prune", &destination])?;
     let s = state(path)?;
+    if s.branch != *branch
+        || s.head != *head
+        || remote(&s)? != destination
+        || s.upstream != original.upstream
+        || s.remote_ref != original.remote_ref
+    {
+        return Err(
+            "The branch, commit, or upstream changed. Review the current branch before pushing."
+                .into(),
+        );
+    }
     require_clean(&s)?;
     if s.upstream_gone {
         return Err("The upstream branch was deleted. Create a new branch before publishing; Reponiq will not recreate it silently.".into());
@@ -236,8 +259,10 @@ pub(super) fn push_recording(path: &Path, published: impl FnOnce(&str)) -> Resul
             "The remote has changes you do not have. Pull or merge upstream before pushing.".into(),
         );
     }
-    branch_name(&s.branch)?;
-    let target = s.remote_ref.as_deref().unwrap_or("");
+    branch_name(branch)?;
+    let oid = head.as_deref().ok_or("Create a commit before pushing.")?;
+    let local_target = format!("refs/heads/{branch}");
+    let target = s.remote_ref.as_deref().unwrap_or(&local_target);
     if s.upstream.is_some() {
         if !target.starts_with("refs/heads/") {
             return Err(
@@ -245,24 +270,29 @@ pub(super) fn push_recording(path: &Path, published: impl FnOnce(&str)) -> Resul
                     .into(),
             );
         }
-        let oid = s.head.as_deref().ok_or("Create a commit before pushing.")?;
-        git(path, &["push", "--", &remote, &format!("{oid}:{target}")])?;
-    } else {
-        git(
+    }
+    git(
+        path,
+        &["push", "--", &destination, &format!("{oid}:{target}")],
+    )?;
+    published(oid);
+    if s.upstream.is_none()
+        && git(
             path,
             &[
-                "push",
-                "--set-upstream",
+                "branch",
+                &format!("--set-upstream-to={destination}/{branch}"),
                 "--",
-                &remote,
-                &format!("{}:refs/heads/{}", s.branch, s.branch),
+                branch,
             ],
-        )?;
+        )
+        .is_err()
+    {
+        return Ok(format!(
+            "Pushed {branch} to {destination}. Git could not set tracking for this branch."
+        ));
     }
-    if let Some(head) = s.head {
-        published(&head);
-    }
-    Ok(format!("Pushed {} to {remote}.", s.branch))
+    Ok(format!("Pushed {branch} to {destination}."))
 }
 pub(super) fn file_path(file: &str) -> Result<(), String> {
     if file.is_empty()
@@ -364,10 +394,38 @@ pub(super) fn commit_paths(path: &Path, message: &str, files: &[String]) -> Resu
             commit_paths.insert(original);
         }
     }
+    let excluded: BTreeSet<_> = changes
+        .iter()
+        .filter(|change| !selected.contains(change.path.as_str()))
+        .flat_map(|change| [Some(change.path.as_str()), change.original_path.as_deref()])
+        .flatten()
+        .filter(|path| !commit_paths.contains(path))
+        .map(|path| path.trim_end_matches('/'))
+        .collect();
+    for path in &commit_paths {
+        let path = path.trim_end_matches('/');
+        let prefix = format!("{path}/");
+        let descendant = excluded
+            .range(prefix.as_str()..)
+            .next()
+            .is_some_and(|candidate| candidate.starts_with(&prefix));
+        let ancestor =
+            std::iter::successors(path.rsplit_once('/').map(|(parent, _)| parent), |parent| {
+                parent.rsplit_once('/').map(|(ancestor, _)| ancestor)
+            })
+            .any(|parent| excluded.contains(parent));
+        if descendant || ancestor {
+            return Err(
+                "Include both the file and the affected folder paths to commit this replacement."
+                    .into(),
+            );
+        }
+    }
     let specs = nul_paths(commit_paths);
     let result = (|| {
-        // Git's path-limited commit preserves unrelated staged changes. New
-        // files need intent-to-add entries before Git will accept their paths.
+        // New files need intent-to-add entries for a path-limited commit.
+        // Leave these markers on failure so cleanup cannot remove staging
+        // written concurrently by another Git process.
         if !untracked.is_empty() {
             git_with_input(
                 path,
@@ -398,37 +456,6 @@ pub(super) fn commit_paths(path: &Path, message: &str, files: &[String]) -> Resu
         )
     })();
 
-    if result.is_err() && !untracked.is_empty() {
-        let cleanup = (|| {
-            let current = self::state(path)?;
-            if current.head != state.head || current.branch != state.branch {
-                return Err("The branch changed during the commit.".to_string());
-            }
-            let remaining = commit_changes(path)?;
-            let intents = nul_paths(
-                remaining
-                    .iter()
-                    .filter(|change| {
-                        change.x == " "
-                            && change.y == "A"
-                            && untracked.contains(change.path.as_str())
-                    })
-                    .map(|change| change.path.as_str()),
-            );
-            if !intents.is_empty() {
-                git_with_input(
-                    path,
-                    &["update-index", "--force-remove", "-z", "--stdin"],
-                    &intents,
-                )?;
-            }
-            Ok(())
-        })();
-        if cleanup.is_err() {
-            return result
-                .map_err(|error| format!("{error} Review Git status before trying again."));
-        }
-    }
     result
 }
 pub(super) fn continue_operation(path: &Path, abort: bool) -> Result<String, String> {

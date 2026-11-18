@@ -43,7 +43,7 @@
     saved = false;
     try {
       fetchSettings = await api.saveFetchSettings({...fetchSettings});
-      if (autostart !== null && startAtSignIn !== autostart) {
+      if (autostart !== null && (!startAtSignIn || startAtSignIn !== autostart)) {
         const desired = startAtSignIn;
         autostart = startAtSignIn = await api.setAutostart(desired);
         if (autostart !== desired) throw new Error('Your system did not apply the sign-in startup setting.');

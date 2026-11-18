@@ -19,19 +19,19 @@ pub(super) struct SavedChanges {
 }
 
 pub(super) fn list(path: &Path, remotes: &[String]) -> Result<Vec<Branch>, String> {
-    let refs = git(
+    let refs = git_exact(
         path,
         &[
             "for-each-ref",
-            "--format=%(refname)%09%(symref)%09%(worktreepath)",
+            "--format=%(refname)%09%(symref)%09%(worktreepath)%00",
             "refs/heads",
             "refs/remotes",
         ],
     )?;
     Ok(refs
-        .lines()
+        .split_terminator('\0')
         .filter_map(|line| {
-            let mut fields = line.splitn(3, '\t');
+            let mut fields = line.trim_start_matches('\n').splitn(3, '\t');
             let reference = fields.next()?;
             let symbolic = fields.next().unwrap_or_default();
             let in_worktree = fields
@@ -431,8 +431,6 @@ fn restore_would_overwrite_ignored(path: &Path, oid: &str) -> Result<bool, Strin
             "--others",
             "--ignored",
             "--exclude-standard",
-            "--directory",
-            "--no-empty-directory",
             "-z",
         ],
     )?;

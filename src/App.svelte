@@ -102,7 +102,7 @@
   function changedMetadata(id:number){localRevisions.set(id,++metadataRevision);}
   function requestStatuses(ids:number[]){for(const id of ids)if(!activeStatuses.has(id))statusQueue.add(id);drainStatuses();}
   function applySummary(summary:RepoSummary){repos=repos.map(repo=>{
-    if(repo.id!==summary.id || (summary.path&&repo.path!==summary.path))return repo;
+    if(repo.id!==summary.id || repo.path!==summary.path || repo.registration!==summary.registration)return repo;
     const counts=summary.status_error ? (!repo.branch ? workflowFor(repo)?.cached_status??{} : {}) : {branch:summary.branch,dirty:summary.dirty,ahead:summary.ahead,behind:summary.behind,conflicts:summary.conflicts};
     return {...repo,...counts,missing:summary.missing,status_error:summary.status_error,status_pending:false};
   });}
@@ -163,6 +163,7 @@
   });
   const commitDraftKey=$derived(commitDraft&&draftKey(commitDraft));
   let draftLoading=$state(false),draftSequence=0;
+  const messageTooLong=$derived(message.length>500);
   $effect(()=>{
     const key=commitDraftKey;
     if(key)void untrack(()=>restoreCommitDraft(key));
@@ -184,7 +185,7 @@
   const markedCount=$derived(changedFiles.filter(file=>markedFiles.has(file.path)).length);
   const commitFiles=$derived(changedFiles.filter(file=>selectionMode==='exclude'
     ? !markedFiles.has(file.path)
-    : markedCount===0||markedFiles.has(file.path)).map(file=>file.path));
+    : markedFiles.size===0||markedFiles.has(file.path)).map(file=>file.path));
   const selectionBranch=$derived(gitState?.branch);
   $effect(()=>{selectionBranch;markedFiles=new Set();});
   function markFile(path:string,checked:boolean){
@@ -198,11 +199,11 @@
   const repoActivity = $derived(current ? activities.filter(item => item.repo_id === current.id).slice(0, 3) : []);
   const attention = $derived(repos.filter(r => r.status_error || r.dirty || r.ahead || r.behind || launchFailures[r.id] || r.ci_conclusion === 'failure').length);
   function targetOf(repo:Repo){return {id:repo.id,path:repo.path,registration:repo.registration};}
-  function workflowFor(repo:Repo){const entry=metadata.get(repo.id);return entry?.path===repo.path?entry:undefined;}
+  function workflowFor(repo:Repo){const entry=metadata.get(repo.id);return entry?.path===repo.path&&entry.registration===repo.registration?entry:undefined;}
   function orderRepos(rows:Repo[]){
-    return rows.slice().sort((a,b)=>Number(b.pinned)-Number(a.pinned)
-      || (a.pinned?(workflowFor(a)?.pin_position??Number.MAX_SAFE_INTEGER)-(workflowFor(b)?.pin_position??Number.MAX_SAFE_INTEGER):0)
-      || a.name.localeCompare(b.name) || a.id-b.id);
+    return rows.slice().sort((a,b)=>Number(b.pinned)-Number(a.pinned) || (a.pinned
+      ? (workflowFor(a)?.pin_position??Number.MAX_SAFE_INTEGER)-(workflowFor(b)?.pin_position??Number.MAX_SAFE_INTEGER)
+      : a.name.localeCompare(b.name) || a.id-b.id));
   }
   let workflowRead=0;
   async function loadMetadata(){
@@ -436,13 +437,13 @@
   async function finishCommit(text:string,files:string[]){
     const context=commitDraft,key=commitDraftKey,sequence=selectionSequence;
     if(await runGit('commit_paths',[text,...files])){
-      if(context)await saveDraft(context,null,workflowApp.save_drafts).catch(reason=>{error=String(reason);});
-      if(commitDraftKey===key)message='';
+      if(context&&(commitDraftKey!==key||message===text))await saveDraft(context,null,workflowApp.save_drafts).catch(reason=>{error=String(reason);});
+      if(commitDraftKey===key&&message===text)message='';
       if(selectionSequence===sequence)markedFiles=new Set();
     }
   }
   function commit(){
-    if(!current||!gitState||working||draftLoading||!message.trim()||!commitFiles.length)return;
+    if(!current||!gitState||working||draftLoading||messageTooLong||!message.trim()||!commitFiles.length)return;
     const request={repo:current,branch:gitState.branch,head:gitState.head,message,files:[...commitFiles]};
     const sequence=selectionSequence;
     const lastAuthor=repoContext?.author;
@@ -479,7 +480,7 @@
     let text='';
     if(await act(async()=>{text=await api.undoCommit(targetOf(repo),expected);},'Commit undone. Files remain staged.',false)
       &&current?.id===repo.id&&gitState?.branch===expected.branch){
-      if(message&&message!==text || new TextEncoder().encode(text).length>500)recoveredMessage=text;
+      if(message&&message!==text || text.length>500)recoveredMessage=text;
       else updateDraft(text);
       activeTab='changes';
     }
@@ -528,7 +529,7 @@
   async function keyboard(event: KeyboardEvent){
 
     const editing=event.target instanceof HTMLInputElement||event.target instanceof HTMLTextAreaElement;
-    if(event.defaultPrevented||modalOpen())return;
+    if(event.defaultPrevented||event.isComposing||modalOpen())return;
 
     if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='k'){event.preventDefault();if(!working)showQuick=true;}
     if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='f'&&current&&activeTab==='changes'){event.preventDefault();showFileSearch=true;await tick();fileSearch?.focus();}
@@ -707,16 +708,17 @@
                 {#if recoveredMessage}
                   <Collapsible>
                     {#snippet heading()}Recovered commit message{/snippet}
-                    <pre>{recoveredMessage}</pre><Button variant="secondary" disabled={new TextEncoder().encode(recoveredMessage).length>500} onclick={useRecoveredMessage}>Use recovered message</Button>
+                    <pre>{recoveredMessage}</pre><Button variant="secondary" disabled={recoveredMessage.length>500} onclick={useRecoveredMessage}>Use recovered message</Button>
                   </Collapsible>
                 {/if}
                 <Textarea disabled={working||draftLoading} aria-label="Commit message" placeholder="Commit message" value={message} oninput={event=>updateDraft(event.currentTarget.value)} rows={2} maxlength={500}></Textarea>
+                {#if messageTooLong}<p class="connection-error" role="alert">Shorten the commit message to 500 characters before committing.</p>{/if}
                 {#if changedFiles.length}
-                  <p aria-live="polite">{markedCount===0 ? 'No files checked. All changes will be committed, including files hidden by filters.' : selectionMode==='exclude' ? `${markedCount} excluded · ${commitFiles.length} to commit` : `${commitFiles.length} selected to commit`}</p>
+                  <p aria-live="polite">{markedFiles.size===0 ? 'No files checked. All changes will be committed, including files hidden by filters.' : selectionMode==='exclude' ? `${markedCount} excluded · ${commitFiles.length} to commit` : markedCount===0 ? 'The selected files have changed. Select files again or clear your selection.' : `${commitFiles.length} selected to commit`}</p>
                 {/if}
                 <div class="toolbar inner">
-                  {#if markedCount}<Button variant="secondary" onclick={()=>markedFiles=new Set()} disabled={working}>Clear selection</Button>{/if}
-                  <Button variant="primary" onclick={commit} disabled={working||draftLoading||!message.trim()||!!current.status_error||!commitFiles.length||!!gitState?.operation||!!gitState?.conflicts.length}>Commit {commitFiles.length&&commitFiles.length===changedFiles.length?'all ':''}{commitFiles.length} {commitFiles.length===1?'file':'files'}</Button>
+                  {#if markedFiles.size}<Button variant="secondary" onclick={()=>markedFiles=new Set()} disabled={working}>Clear selection</Button>{/if}
+                  <Button variant="primary" onclick={commit} disabled={working||draftLoading||messageTooLong||!message.trim()||!!current.status_error||!commitFiles.length||!!gitState?.operation||!!gitState?.conflicts.length}>Commit {commitFiles.length&&commitFiles.length===changedFiles.length?'all ':''}{commitFiles.length} {commitFiles.length===1?'file':'files'}</Button>
                 </div>
               </div>
               </Tabs.Content>
@@ -832,6 +834,7 @@
   <LocateRepo repo={locating} mainWorktree={metadata.get(locating.id)?.main_worktree} onclose={()=>locating=null} onlocated={async()=>{
     const previous=locating;if(!previous)return;locating=null;
     statusVersions.set(previous.id,(statusVersions.get(previous.id)??0)+1);
+    await loadFlight;
     await load();await loadMetadata();
     if(selected===previous.id)await selectRepo(previous.id);
   }} onadded={async repo=>{locating=null;await repositoryAdded(repo);}}/>

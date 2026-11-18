@@ -18,7 +18,7 @@
   const results=$derived((query.trim()?matching:[...pinned,...recent,...matching.filter(repo=>!repo.pinned&&!recent.includes(repo))]).slice(0,60));
   const selected=$derived(results[index]??results[0]);
   function keys(event:KeyboardEvent){
-    if(!results.length)return;
+    if(event.isComposing||!results.length)return;
     if(event.key==='ArrowDown'||event.key==='ArrowUp'){
       event.preventDefault();index=(index+(event.key==='ArrowDown'?1:-1)+results.length)%results.length;
       document.getElementById('repo-result-'+results[index].id)?.scrollIntoView({block:'nearest'});
@@ -30,10 +30,11 @@
   <h2>Switch repository</h2>
   <Label for="quick-repo-search">Find a repository</Label>
   <Input id="quick-repo-search" type="search" bind:value={query} oninput={()=>index=0} onkeydown={keys} placeholder="Name, folder, branch, or tag"/>
+  <span class="screen-reader-status" role="status">{selected ? `${selected.name}, ${index + 1} of ${results.length}` : 'No matching repositories'}</span>
   <div class="branch-results">
     {#each results as repo,i (repo.id)}
       <div class="quick-repo-row">
-        <Button id={'repo-result-'+repo.id} class={["commit-choice", {"is-selected": index===i}]} onclick={()=>onselect(repo)}>
+        <Button id={'repo-result-'+repo.id} class={["commit-choice", {"is-selected": index===i}]} aria-current={index===i?'true':undefined} onclick={()=>onselect(repo)}>
           <span><strong>{repo.name}</strong><small>{repo.pinned?'Pinned':recent.includes(repo)?'Recent':'Repository'} · {repo.branch||'Branch unavailable'}</small></span>
         </Button>
         {#if repo.pinned&&!query.trim()}
@@ -54,3 +55,7 @@
     </div>
   {/if}
 </Modal>
+
+<style>
+  .screen-reader-status{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+</style>

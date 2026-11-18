@@ -21,6 +21,12 @@
   let email=$state(untrack(()=>context?.local_email??''));
   let busy=$state(false),message=$state(''),error=$state('');
   let executable=$derived(target ? local.editor : global.editor);
+  $effect(() => {
+    if (context) {
+      author = context.local_name ?? '';
+      email = context.local_email ?? '';
+    }
+  });
 
   async function browse(){
     if(busy)return;
@@ -43,7 +49,7 @@
     try{
       if(target){
         const saved=await api.saveRepoWorkflow(target,{...local,preferred_base:local.preferred_base?.trim()||null,
-          review_paths:[...new Set(paths.split('\n').map(path=>path.trim()).filter(Boolean))]});
+          review_paths:[...new Set(paths.split(/\r?\n/).filter(path=>path.trim()))]});
         local=saved;onsaved(saved);
       }else{
         global=await api.saveWorkflowApp({...global});onsaved(global);

@@ -244,6 +244,16 @@ fn worktree(path: &Path, reference: &str) -> Result<PathBuf, String> {
         .ok_or("Git could not find an existing worktree for that branch.".into())
 }
 
+fn launch_program(command: &mut Command) -> std::io::Result<()> {
+    let mut child = command.spawn()?;
+    if cfg!(unix) {
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+    }
+    Ok(())
+}
+
 fn terminal(path: &Path) -> Result<(), String> {
     #[cfg(windows)]
     let choices = ["System32/cmd.exe"];
@@ -284,7 +294,7 @@ fn terminal(path: &Path) -> Result<(), String> {
                 }
                 _ => {}
             }
-            if command.spawn().is_ok() {
+            if launch_program(&mut command).is_ok() {
                 return Ok(());
             }
         }
@@ -323,7 +333,7 @@ pub async fn open_repo_location(
             }
             "editor" => {
                 let executable=workflow::editor_path(editor)?.ok_or("Choose an editor in Settings, or open the repository folder.")?;
-                Command::new(executable).arg(&path).current_dir(&path).spawn().map_err(|_|"Could not launch the selected editor. Choose another editor or open the folder.")?;
+                launch_program(Command::new(executable).arg(&path).current_dir(&path)).map_err(|_|"Could not launch the selected editor. Choose another editor or open the folder.")?;
                 Ok(())
             }
             "terminal" => terminal(&path),
@@ -466,9 +476,6 @@ fn verified_published(
 ) -> Result<bool, String> {
     let unavailable =
         "Could not verify that this commit is unpublished. Fetch and try again, or use Revert.";
-    if remotes.is_empty() && known.is_empty() {
-        return Ok(false);
-    }
     if known.len() > 500
         || git(path, &["rev-parse", "--is-shallow-repository"]).as_deref() != Ok("false")
         || git(

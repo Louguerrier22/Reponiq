@@ -238,16 +238,22 @@ impl Api {
         }
         Ok(())
     }
-    async fn create_from_comparison(&self, input: &CreatePull) -> Result<Pull, String> {
+    async fn create_from_comparison(&self, input: &CreatePull) -> Result<CreatedPull, String> {
         self.published_branch(&input.head, &input.expected_head)
             .await?;
         if self.published_tip(&input.base).await? != input.expected_base {
             return Err("The base branch changed. Compare the branches again before creating the pull request.".into());
         }
-        self.request(
+        let (pull, _): (Pull, _) = self.request(
             reqwest::Method::POST, "/pulls",
             Some(json!({"title":input.title.trim(),"body":input.body,"base":input.base,"head":input.head,"draft":input.draft})),
-        ).await.map(|result| result.0)
+        ).await?;
+        let matches_comparison =
+            pull.head.sha == input.expected_head && pull.base.sha == input.expected_base;
+        Ok(CreatedPull {
+            pull,
+            matches_comparison,
+        })
     }
     async fn checks(&self, sha: &str) -> Result<Checks, String> {
         hash_valid(sha)?;
@@ -438,7 +444,11 @@ fn check_link(full: &str, number: u64, candidate: Option<&str>) -> String {
                 && url.port().is_none()
                 && url.username().is_empty()
                 && url.password().is_none()
-                && url.path().strip_prefix(&root).is_some_and(|suffix| {
+                && url
+                    .path()
+                    .get(..root.len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(&root))
+                && url.path().get(root.len()..).is_some_and(|suffix| {
                     ["actions/runs/", "runs/"].iter().any(|prefix| {
                         suffix.strip_prefix(prefix).is_some_and(|tail| {
                             tail.split('/').next().is_some_and(|id| {
@@ -600,9 +610,12 @@ pub async fn create_pull_request(
     account_id: i64,
     input: CreatePull,
     state: tauri::State<'_, State>,
-) -> Result<Pull, String> {
+) -> Result<CreatedPull, String> {
     let _update = super::updater::workspace_job()?;
-    if input.title.trim().is_empty() || input.title.len() > 256 || input.body.len() > 20000 {
+    if input.title.trim().is_empty()
+        || input.title.encode_utf16().count() > 256
+        || input.body.encode_utf16().count() > 20000
+    {
         return Err(
             "Enter a title under 256 characters and a description under 20,000 characters.".into(),
         );
@@ -636,6 +649,12 @@ pub async fn create_pull_request(
     })
     .await?;
     api.create_from_comparison(&input).await
+}
+
+#[derive(Serialize)]
+pub struct CreatedPull {
+    pull: Pull,
+    matches_comparison: bool,
 }
 fn review_body(event: &str, body: &str) -> Result<(), String> {
     if !matches!(event, "APPROVE" | "REQUEST_CHANGES" | "COMMENT")
@@ -948,6 +967,35 @@ mod tests {
             Err(error) => assert!(error.contains("base branch changed"), "{error}"),
         }
         assert_eq!(requests.load(Ordering::Acquire), 0);
+    }
+    #[tokio::test]
+    async fn created_pull_reports_if_github_received_a_different_commit() {
+        let _fixture = TRANSPORT_FIXTURE.lock().await;
+        let server = server(|headers, _| {
+            let value = if headers.starts_with("POST ") {
+                let mut pull = details().pull;
+                pull.head.sha = "b".repeat(40);
+                serde_json::to_value(pull).unwrap()
+            } else {
+                json!({"commit":{"sha":"a".repeat(40)}})
+            };
+            (200, serde_json::to_vec(&value).unwrap(), String::new())
+        });
+        let input = CreatePull {
+            title: "Update".into(),
+            body: String::new(),
+            base: "main".into(),
+            head: "topic".into(),
+            expected_head: "a".repeat(40),
+            expected_base: "a".repeat(40),
+            draft: false,
+        };
+        let created = client(&server)
+            .create_from_comparison(&input)
+            .await
+            .unwrap();
+        assert_eq!(created.pull.number, 1);
+        assert!(!created.matches_comparison);
     }
     #[tokio::test]
     async fn redirects_are_not_followed_and_error_bodies_are_not_exposed() {

@@ -184,6 +184,7 @@ pub(super) fn fetched(db: &Connection, id: i64, path: &std::path::Path) -> Resul
 pub(super) fn cache_status(db: &Connection, status: &super::RepoSummary) -> Result<(), String> {
     if status.status_error.is_some()
         || repo_path(db, status.id)? != std::path::Path::new(&status.path)
+        || registration(db, status.id)? != status.registration
     {
         return Ok(());
     }
@@ -492,8 +493,8 @@ fn validate_draft(scope: &DraftScope, value: Option<&Draft>) -> Result<(), Strin
         branch_name(&scope.base)?;
     }
     if let Some(value) = value {
-        if value.title.len() > if scope.account.is_empty() { 500 } else { 256 }
-            || value.body.len() > if scope.account.is_empty() { 0 } else { 20000 }
+        if value.title.encode_utf16().count() > if scope.account.is_empty() { 500 } else { 256 }
+            || value.body.encode_utf16().count() > if scope.account.is_empty() { 0 } else { 20000 }
         {
             return Err("The draft exceeds the message length limit.".into());
         }

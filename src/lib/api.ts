@@ -1,7 +1,7 @@
 import { invoke } from './diagnostics';
 import { remoteInfo } from './platform';
 export type Repo = { id: number; registration?:string|null; path: string; name: string; remote_url: string | null; pinned: boolean; collection: string | null; tags: string[]; branch: string; dirty: number; ahead: number; behind: number; github_full_name: string | null; ci_conclusion: string | null; ci_status: string | null; status_error?: string | null;status_pending?:boolean; conflicts?:number; missing?:boolean };
-export type RepoSummary = Pick<Repo,'id'|'path'|'branch'|'dirty'|'ahead'|'behind'|'status_error'|'conflicts'|'missing'>;
+export type RepoSummary = Pick<Repo,'id'|'path'|'registration'|'branch'|'dirty'|'ahead'|'behind'|'status_error'|'conflicts'|'missing'>;
 export type Target = Pick<Repo,'id'|'path'|'registration'>;
 export type Override = 'inherit'|'on'|'off';
 export type RepoPreferences = {fetch_mode:Override;warn_default:Override;editor:string|null;review_paths:string[];preferred_base:string|null};
@@ -93,7 +93,7 @@ export const api = {
   pullDetails: (id:number,accountId:number,number:number) => invoke<PullDetails>('pull_request_details',{id,accountId,number}),
   pullFiles: (id:number,accountId:number,number:number,page:number,commit:string|null) => invoke<Page<PullFile>>('pull_request_files',{id,accountId,number,page,commit}),
   pullCommits: (id:number,accountId:number,number:number) => invoke<Page<PullCommit>>('pull_request_commits',{id,accountId,number}),
-  createPull: (id:number,accountId:number,input:{title:string;body:string;base:string;head:string;expected_head:string;expected_base:string;draft:boolean}) => invoke<Pull>('create_pull_request',{id,accountId,input}),
+  createPull: (id:number,accountId:number,input:{title:string;body:string;base:string;head:string;expected_head:string;expected_base:string;draft:boolean}) => invoke<{pull:Pull;matches_comparison:boolean}>('create_pull_request',{id,accountId,input}),
   comparePull: (id:number,accountId:number,base:string,head:string,expectedHead:string) => invoke<PullComparison>('compare_pull_branches',{id,accountId,base,head,expectedHead}),
   reviewPull: (id:number,accountId:number,number:number,head:string,event:string,body:string) => invoke<Review>('review_pull_request',{id,accountId,number,head,event,body}),
   mergePull: (id:number,accountId:number,number:number,head:string,method:string) => invoke<string>('merge_pull_request',{id,accountId,number,head,method}),
