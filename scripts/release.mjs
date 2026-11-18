@@ -37,4 +37,32 @@ if (process.argv[2] === 'verify') {
   }
   fs.writeFileSync(path.join(output, 'SHA256SUMS.txt'), `${sums.join('\n')}\n`);
   console.log(`Collected ${formats.length} installer(s) with SHA-256 checksums in ${output}`);
-} else throw new Error('Use verify or collect <windows-x64|linux-x64>.');
+} else if (process.argv[2] === 'update-manifest') {
+  const outputs = [
+    ['windows-x86_64', 'windows-x64', 'exe'],
+    ['linux-x86_64', 'linux-x64', 'AppImage'],
+  ];
+  const platforms = {};
+  for (const [target, directory, extension] of outputs) {
+    const name = `Reponiq-${version}-${directory}.${extension}`;
+    const asset = path.join('.work', 'release', directory, name);
+    const info = fs.lstatSync(asset);
+    if (!info.isFile() || info.isSymbolicLink()) throw new Error(`Invalid update asset ${name}.`);
+    const signatureFile = asset + '.sig';
+    const signatureInfo = fs.lstatSync(signatureFile);
+    if (!signatureInfo.isFile() || signatureInfo.isSymbolicLink() || signatureInfo.size > 4096) throw new Error(`Invalid signature file for ${name}.`);
+    const signature = fs.readFileSync(signatureFile, 'utf8').trim();
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(signature)) throw new Error(`Malformed signature for ${name}.`);
+    const signedComment = Buffer.from(signature, 'base64').toString('utf8').split('\n')
+      .find(line => line.startsWith('trusted comment: '));
+    if (!signedComment?.split('\t').includes(`version:${version}`)) {
+      throw new Error(`Sign ${name} for version ${version} before generating the manifest.`);
+    }
+    platforms[target] = {
+      signature,
+      url: `https://github.com/Louguerrier22/Reponiq/releases/download/v${version}/${name}`,
+    };
+  }
+  fs.writeFileSync('.work/release/latest.json', JSON.stringify({ version, platforms }, null, 2) + '\n', { flag: 'wx' });
+  console.log(`Prepared the Reponiq ${version} update manifest for signed Windows and AppImage assets.`);
+} else throw new Error('Use verify, collect <windows-x64|linux-x64>, or update-manifest.');

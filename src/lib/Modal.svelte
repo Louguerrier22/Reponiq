@@ -1,17 +1,35 @@
 <script lang="ts">
-  import { onMount, type Snippet } from 'svelte';
-  let { label, onclose, children, canClose=true }: { label: string; onclose: () => void; children: Snippet; canClose?: boolean } = $props();
-  let dialog: HTMLDialogElement;
-  let destroyed=false;
-  onMount(() => {
-    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const overflow=document.body.style.overflow;
-    document.body.style.overflow='hidden';
-    dialog.showModal();
-    return () => { destroyed=true;dialog.close();document.body.style.overflow=overflow;if(trigger?.isConnected)trigger.focus();else document.getElementById('main-content')?.focus({preventScroll:true}); };
-  });
+  import { Dialog } from 'bits-ui';
+  import { type Snippet, untrack } from 'svelte';
+  import DialogContent from './ui/DialogContent.svelte';
+
+  let {
+    label, onclose, children, canClose = true, walkthrough = false
+  }: {
+    label: string; onclose: () => void; children: Snippet;
+    canClose?: boolean; walkthrough?: boolean;
+  } = $props();
+  const opener = untrack(() => document.activeElement instanceof HTMLElement ? document.activeElement : null);
+
+  function restoreFocus(event: Event) {
+    event.preventDefault();
+    const target = opener?.isConnected ? opener : document.getElementById('main-content');
+    target?.focus({ preventScroll: true });
+  }
 </script>
 
-<dialog bind:this={dialog} class="modal" aria-label={label} oncancel={(event)=>{if(!canClose)event.preventDefault();}} onclose={()=>{if(!destroyed)onclose();}}>
-  {@render children()}
-</dialog>
+<Dialog.Root open={true} onOpenChange={(open) => { if (!open) onclose(); }}>
+  <DialogContent
+    class={walkthrough ? 'tour-overlay' : 'modal'}
+    overlayClass={walkthrough ? 'ui-dialog-overlay tour-backdrop' : 'ui-dialog-overlay'}
+    aria-label={label}
+    onInteractOutside={(event) => event.preventDefault()}
+    onEscapeKeydown={(event) => {
+      if (!canClose || walkthrough) event.preventDefault();
+      if (walkthrough && canClose) onclose();
+    }}
+    onCloseAutoFocus={restoreFocus}
+  >
+    {@render children()}
+  </DialogContent>
+</Dialog.Root>

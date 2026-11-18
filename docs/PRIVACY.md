@@ -6,6 +6,10 @@ Reponiq has no hosted backend, analytics, advertising, crash-reporting service, 
 | --- | --- | --- |
 | Repository paths, names, remotes, collections, tags, pins | Workspace organization | Local SQLite database |
 | Default repository folder, discovery preference and setup completion | Optional folder setup | Local SQLite preferences |
+| Launch fetch preference and scope | Optional one-time refresh at each launch | Local SQLite preferences |
+| Sign-in startup registration | Optionally open Reponiq at OS sign-in | Current user's Windows startup entry or Linux autostart desktop entry |
+| Stashed edits | Recover work after switching branches | Local Git stash in the repository, retained after restore |
+| Commit and unsent PR drafts, repo workflow preferences, recent branches, fetch timestamps, and known published commit IDs | Resume work and verify eligibility for local undo | Local SQLite records tied to the repository registration. Turn off draft saving to delete drafts from the database. |
 | Local Git actions and observed workflow runs | Activity journal | Local SQLite database |
 | Runtime messages, command timings, Git errors and stack information | Local troubleshooting through Live logs | Memory and two bounded local log files next to the database; exported only when requested |
 | GitHub login, API host, connection timestamp | Account list | Local SQLite database |
@@ -17,6 +21,10 @@ Repository discovery reads Git markers in the folder you choose. GitHub Desktop 
 Browser sign-in contacts GitHub device authorization endpoints and opens the fixed GitHub verification page. Device codes stay in native memory until cancellation or expiry. Account catalogs request accessible repositories and organizations. Creating a remote sends its name, owner and selected visibility to GitHub; cloning downloads through system Git without storing the API token in its origin URL. In-app PR actions send the selected repository, branch, review/comment, PR title/body or merge request to GitHub only when requested. Conflict file contents are not written into the activity journal. Adding a GitHub token validates it with GitHub’s `/user` endpoint. Manual sync requests recent workflow runs for registered GitHub.com repositories. GitHub applies its own terms and privacy practices. Git fetch/pull/push use your Git configuration and may contact the remotes you configured. Installing a missing WebView2 runtime may contact Microsoft.
 
 Remove a repository in Reponiq to remove its workspace record; this never deletes the working tree. Existing activity entries retain event text and may retain repository names or paths inside that text. Disconnecting a GitHub account deletes its saved access/refresh credentials and account record. This does not revoke GitHub authorization; revoke it separately on GitHub. Local records remain on your device until removed; there is no developer-operated retention or remote deletion service. See the user guide for exact file locations. Backups you create are your responsibility.
+
+If you enable **Fetch on launch**, system Git contacts the remotes configured for eligible repositories after the shelf opens. Sign-in startup can be enabled or removed separately in Settings or the operating system's startup controls. Saved edits remain in your Git stash until removed with Git.
+
+On Windows and Linux AppImage, App updates contacts Reponiq's public GitHub release feed on launch. It downloads a matching signed package when available. Update requests have no account token and send no workspace data.
 
 Live logs retain up to 2,000 entries in memory and two 2 MiB files in the database folder’s `logs` directory. Standard credential fields, URL credentials/query strings, recognized token formats, and known account secrets are redacted. Logs may still include local paths, repository identities, and other private details. Review them before sharing. Clear logs in the viewer to remove the saved diagnostic history.
 

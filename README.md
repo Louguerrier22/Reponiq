@@ -23,7 +23,7 @@ A native desktop Git workspace for Windows and Linux. Organize projects, review 
 | Fedora / RHEL family x64 | [RPM package](https://github.com/Louguerrier22/Reponiq/releases/download/v1.0.1/Reponiq-1.0.1-linux-x64.rpm) | WebKitGTK 4.1 |
 | Other Linux x64 | [AppImage](https://github.com/Louguerrier22/Reponiq/releases/download/v1.0.1/Reponiq-1.0.1-linux-x64.AppImage) | WebKitGTK 4.1 / FUSE support |
 
-Install [Git](https://git-scm.com/downloads) first. See [installation and checksum verification](docs/INSTALLATION.md) for prerequisites. Installers are unsigned; there is no automatic updater. Repository access is required while distribution remains private. Availability and tested limits are recorded in [release verification](docs/RELEASE_CHECKLIST.md).
+Install [Git](https://git-scm.com/downloads) first. See [installation and checksum verification](docs/INSTALLATION.md) for prerequisites. Reponiq 1.1 prepares signed updates on Windows and for Linux AppImage builds. Availability and tested limits are recorded in [release verification](docs/RELEASE_CHECKLIST.md).
 
 ## A calmer Git workflow
 
@@ -31,11 +31,11 @@ Install [Git](https://git-scm.com/downloads) first. See [installation and checks
 
 **Review, then commit.** Select a file for its diff. Stage individual files and split work into separate commits. Inspect older commits and their files, or undo one with a new revert commit.
 
-**Keep branches moving.** Switch from a real branch dropdown. Fetch, pull with fast-forward protection and push committed work. Resolve text conflicts inside the app, then continue or abort the operation.
+**Keep branches moving.** Search local and fetched branches. Bring your edits along or stash them before switching, then restore them when you return. Fetch, pull with fast-forward protection and push committed work.
 
-**Work with pull requests.** Connect GitHub in your browser. Read patches, review, create a PR from a published branch and merge after checks and policy allow it.
+**Work with pull requests.** Connect GitHub in your browser. Compare a published branch before opening a PR. Read patches, check the results, submit a review and merge when GitHub allows it.
 
-First-run folder setup comes before a skippable walkthrough. Change the default folder and replay the tour from Settings. Import local repositories from GitHub Desktop history, VS Code recent folders, or any Git client's repository folder; review discovered entries before adding them.
+First-run setup offers a default folder, optional launch fetch and optional sign-in startup. Change these choices or replay the walkthrough from Settings. Import local repositories from GitHub Desktop history, VS Code recent folders, or any Git client's repository folder and review the matches before adding them.
 
 ## Supported platforms
 

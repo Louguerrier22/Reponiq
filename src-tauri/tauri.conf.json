@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Reponiq",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "identifier": "dev.reponiq.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -22,6 +22,14 @@
     ],
     "security": {
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE3MEQ2Qjc3NTc4NzlBMkMKUldRc21vZFhkMnNORjRtcjV3MnZtZ0ZuTGJwa2VXS3YwblFnUW81ZHFHWTNDVU5nY3RZak5qTTEK",
+      "endpoints": ["https://github.com/Louguerrier22/Reponiq/releases/latest/download/latest.json"],
+      "requireSignedVersion": true,
+      "windows": { "installMode": "passive" }
     }
   },
   "bundle": {

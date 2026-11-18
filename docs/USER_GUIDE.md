@@ -2,7 +2,7 @@
 
 [Documentation](README.md) · [Install](INSTALLATION.md) · [Troubleshooting](TROUBLESHOOTING.md)
 
-This guide describes Reponiq 1.0.1. On first launch, choose a default repository folder or skip setup. A short walkthrough then introduces repositories, commits and remote work. Skip or finish it at any time; reopen it from Settings.
+On first launch, choose a default repository folder or skip it. The Startup step lets you opt into refreshing remote branches or starting Reponiq at sign-in. A short walkthrough then introduces repositories, commits and remote work. Skip or finish it at any time and reopen it from Settings.
 
 ## Repositories and organization
 
@@ -36,9 +36,19 @@ On Linux, Create and Clone require a parent folder owned by your account that ot
 
 ## Changes, branches and commits
 
-Use the branch dropdown to switch branches or create one. Select a file to inspect its diff; its checkbox stages or unstages it. Commit requires staged changes and a message. To split changes into several commits, stage a subset of files, commit it, then stage the next subset. Per-hunk staging is not available. Untracked files show a Git diff once staged; binary changes may have no text preview.
+Open the current branch button and search for a local branch or a branch fetched from a remote. If a branch is missing, choose **Fetch branches** and search again. Selecting a remote branch creates a local branch that tracks the named remote. Select **Create branch** to start a new branch from your current commit.
 
-History lets you select a commit, inspect its files and open each file's diff. Load more retrieves another page. Revert creates a new undo commit and preserves history. Reverting a merge uses its first parent; the confirmation explains this. Commit drafts stay in memory for this session.
+If you have edits, **Stay here** leaves everything in place. **Bring changes** carries them to the selected branch if Git can switch safely. **Stash and switch** saves staged, unstaged and untracked edits on the current branch before switching. Return to that branch with a clean working folder and use **Restore changes** in the branch picker. Reponiq restores the staging when Git can apply it and keeps a recovery copy in the Git stash.
+
+In **Changes**, select a filename to inspect its diff. Leave the checkboxes empty to commit all changed files, including new files. In **Include** mode, check the files you want to commit. In **Exclude** mode, check the files you want to leave out. Switching modes keeps your checkmarks and changes what they mean. The commit button shows how many files are included. Commits use the current working copy of each included file. Other files, including their staged changes, stay available for a later commit. Use **Stage to preview diff** to inspect a new file before committing. Binary changes may have no text preview.
+
+History lets you select a commit, inspect its files, and open each file's diff. **Undo last local commit** moves an eligible branch back one commit and keeps the edits staged. Reponiq checks current remote refs and known publication history before undoing a commit. If a remote check cannot be completed, use **Revert** for a shared commit. Revert creates a new commit and preserves history. Reverting a merge uses its first parent.
+
+Reponiq saves commit messages by repository and branch, and unsent PR text by repository, branch, account, and base. **Settings → Workflow defaults → Save drafts on this device** controls whether drafts survive a restart. Turning it off clears saved drafts. Text already opened in the session can remain until the app closes.
+
+The commit area shows the author Git will use. Change the repository author using **Repository actions → Repository settings**. The GitHub account selected for PRs is a separate setting. The default-branch reminder offers a new branch that carries your edits, or lets you explicitly commit on the default branch. Repository settings can override the reminder.
+
+Use **Collapse review paths** to fold files or folders such as lockfiles or generated output. The group count and **Show all** make those files easy to find. Search and grouping affect the list only, so hidden files can still be included in a commit. Press Ctrl+F to search the changes list.
 
 ## Fetch, pull and push
 
@@ -52,13 +62,19 @@ Settings offers browser sign-in. Start, open GitHub, enter/confirm the displayed
 
 Credentials remain in the OS credential store. Browser access tokens refresh natively; no client secret is bundled. Disconnect deletes local credentials; revoke access in GitHub settings to revoke the remote authorization too. GitHub.com is the only account/API host supported.
 
-For a repository whose origin is GitHub.com, open Pull requests and choose an account. Select a PR, its files or a commit to inspect patches. Submit a comment, approval or requested changes. Creation uses the clean, published current branch and another base branch in that same origin repository. A fork-target creation picker is not included. Merge confirms the reviewed head and rechecks checks, reviews and provider policy. New commits, pending checks, conflicts or incomplete metadata block it. GitHub remains the final authority for branch protection. After merge, Fetch updates local references; Pull updates your local branch when possible.
+For a repository whose origin is GitHub.com, open **Pull requests** and choose an account. To create a PR, commit and publish your branch, choose **New pull request**, and select the base branch in the same repository. Use **Compare changes** to see the commits and changed files, then fill in a title and description. Choose Draft when the change is still in progress.
+
+To review, open the PR and inspect its files or individual commits. Open the checks and review history before commenting, approving, or requesting changes. **Merge** shows the selected method and reviewed commit. Reponiq rechecks the latest commit, reviews and checks before sending the merge request, and GitHub applies repository rules. After a merge, switch to the base branch and **Pull** to update your local copy when Git can fast-forward it.
 
 Lists load 25 PRs and 100 files per page. Commit selection covers the first 100 PR commits. Local history loads 50 commits per page up to 10,000; commit files are bounded at 1,000. Diffs display at most 1,500 lines / 200,000 characters. Large or truncated patches may need external tooling. Errors after an uncertain network result require refreshing before retrying an action.
 
 ## Activity, storage and keyboard
 
-Sync GitHub manually retrieves recent Actions runs. It is not a complete GitHub audit trail. No background GitHub polling is configured. The saved shelf loads before Git status checks, and local status updates automatically while the window is visible or regains focus. Pinning and organization do not rescan the workspace. Ctrl+K focuses shelf search. Escape dismisses idle dialogs; mutation dialogs stay open until the operation finishes. Focus returns to the trigger.
+Under **Settings → Startup**, enable **Fetch on launch** to refresh pinned repositories once per launch, or choose all registered repositories. Each repository can follow that scope, opt in, or use manual fetch only. The global switch must be enabled for any launch fetch to run. Fetch begins after the shelf appears and uses your existing Git credentials. A failure appears on the affected repo with **Retry fetch**. **Start Reponiq at sign-in** opens the normal window on your next OS sign-in. Both features start off. If you move an AppImage, reopen it at the new location and enable sign-in startup there to update the registration.
+
+Sync GitHub manually retrieves recent Actions runs. The saved shelf loads before Git status checks, and local status updates while the window is visible or regains focus. Ctrl+K opens the repo switcher from the shelf or workbench. Use the arrow keys and Enter to open a repo, or use **Move up/down** to arrange pins. Open the selected repo in your editor, terminal, or file manager from the switcher or **Repository actions**. Choose an app-wide editor in Workflow defaults, or override it per repo. Escape dismisses idle dialogs and returns focus.
+
+For a moved or missing repo, use **Locate folder** to preview the replacement before relinking. Relinking preserves your pins, tags, settings, and saved drafts. A different remote can be added as a separate repository. For PRs, the last account with a successful GitHub request and an optional preferred base are shown before comparison. **Open check** takes you to the failure on GitHub when the provider supplies a valid link.
 
 Windows stores metadata at %APPDATA%\Reponiq\reponiq.sqlite. Linux uses ${XDG_DATA_HOME:-~/.local/share}/reponiq/reponiq.sqlite. Existing ForgeDesk installations continue using ForgeDesk/forgedesk.sqlite (Windows) or forgedesk/forgedesk.sqlite (Linux), with the original credential namespace. If both databases exist, the legacy database takes priority; they are not merged automatically. Back up the database separately from the OS credential store.
 

@@ -45,6 +45,8 @@ The AppImage may require FUSE 2; consult your distribution’s package manager. 
 
 ## Updates and uninstall
 
-Quit the app before installing a newer version. There is no automatic updater. Install the new package for your system; keep a copy of your local database if you need an independent backup. Uninstalling the application does not intentionally remove your local organization/history or OS credentials. Disconnect accounts in Settings before uninstalling if you want their saved tokens deleted.
+Install 1.1 or later manually the first time if you're running a 1.0 build. On Windows and Linux AppImage, Reponiq checks its GitHub release feed on launch and prepares a newer signed package in the background. The sidebar shows **Update ready** when the download and signature check finish. Open it and choose **Restart and update**, or fully quit from the window or tray and reopen once the installer finishes. If Reponiq is busy, let the workspace operation finish and retry. A quit during download cancels that attempt and the next launch checks again. If installation fails, retry from the update dialog or quit to leave it for the next launch. Packages installed as DEB or RPM are updated through their package manager.
+
+Quit the app before manually installing a newer version. Keep an independent backup of the local database if needed. Uninstalling the application does not intentionally remove your local organization/history or OS credentials. Disconnect accounts in Settings before uninstalling if you want their saved tokens deleted.
 
 Existing pre-rename installations keep their original database and credential namespace. New installations use the Reponiq names. See the [data compatibility record](ARCHITECTURE.md#data-compatibility).

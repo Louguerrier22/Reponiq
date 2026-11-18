@@ -8,6 +8,6 @@ Native Windows/Linux packages; repository shelf with pins, collections and tags;
 
 ## Future work
 
-Stash/restore, per-hunk staging, branch comparison, cherry-pick, editor/terminal shortcuts, worktrees, fork-target PR creation, additional provider APIs, optional background sync, signing, automatic updates and ARM packages remain future work. No dates or availability are promised. Broad Linux desktop qualification and independent accessibility review also remain separate work.
+Per-hunk staging, local branch comparison, cherry-pick, full worktree management, fork-target PR creation, additional provider APIs, periodic background sync and ARM packages remain future work. Broad Linux desktop qualification and independent accessibility review also remain separate work.
 
 [Release verification](RELEASE_CHECKLIST.md) records observed platform limits. Closing the window exits the app; it is not a close-to-tray workflow.

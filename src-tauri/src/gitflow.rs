@@ -1,8 +1,35 @@
-use super::{branch_name, err, git, parse_changes, repo_path, Commit, State};
+use super::{
+    branch_name, err, git, git_exact, git_with_input, parse_changes, repo_path, Change, Commit,
+    State,
+};
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::{
+    collections::{BTreeSet, HashMap},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, Weak},
+};
 
 pub(super) static MUTATIONS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub(super) fn common_directory(path: &Path) -> Result<PathBuf, String> {
+    let common = git(path, &["rev-parse", "--git-common-dir"])?;
+    std::fs::canonicalize(path.join(common)).map_err(err)
+}
+
+pub(super) fn repository_lock(path: &Path) -> Result<Arc<Mutex<()>>, String> {
+    type Repositories = HashMap<PathBuf, Weak<Mutex<()>>>;
+    static LOCKS: std::sync::LazyLock<Mutex<Repositories>> =
+        std::sync::LazyLock::new(Default::default);
+    let key = common_directory(path)?;
+    let mut locks = LOCKS.lock().map_err(err)?;
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+        return Ok(lock);
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(key, Arc::downgrade(&lock));
+    Ok(lock)
+}
 
 #[derive(Serialize)]
 pub struct GitState {
@@ -115,6 +142,9 @@ pub(super) fn require_clean(state: &GitState) -> Result<(), String> {
     if state.dirty > 0 {
         return Err("Commit all changes before continuing. Untracked files must also be committed or ignored.".into());
     }
+    require_clean_head(state)
+}
+pub(super) fn require_clean_head(state: &GitState) -> Result<(), String> {
     if !state.has_head {
         return Err("Create your first commit before continuing.".into());
     }
@@ -138,7 +168,15 @@ pub(super) fn fetch(path: &Path) -> Result<String, String> {
     git(path, &["fetch", "--all", "--prune"])?;
     Ok("Fetched all remotes. Your working files were not changed.".into())
 }
+#[cfg(test)]
 pub(super) fn pull(path: &Path, merge: bool) -> Result<String, String> {
+    pull_recording_fetch(path, merge, || {})
+}
+pub(super) fn pull_recording_fetch(
+    path: &Path,
+    merge: bool,
+    fetched: impl FnOnce(),
+) -> Result<String, String> {
     let s = state(path)?;
     require_clean(&s)?;
     if s.upstream_gone {
@@ -148,6 +186,7 @@ pub(super) fn pull(path: &Path, merge: bool) -> Result<String, String> {
         return Err("This branch has no upstream. Publish it first, or configure its tracking branch with Git.".into());
     }
     git(path, &["fetch", "--prune", remote(&s)?])?;
+    fetched();
     let s = state(path)?;
     require_clean(&s)?;
     if s.upstream_gone {
@@ -175,15 +214,42 @@ pub(super) fn pull(path: &Path, merge: bool) -> Result<String, String> {
         }
     }
 }
+#[cfg(test)]
 pub(super) fn push(path: &Path) -> Result<String, String> {
-    let s = state(path)?;
-    require_clean(&s)?;
-    if s.upstream_gone {
+    push_recording(path, None, |_| {})
+}
+pub(super) fn push_recording(
+    path: &Path,
+    expected: Option<&super::GitExpectation>,
+    published: impl FnOnce(&str),
+) -> Result<String, String> {
+    let original = state(path)?;
+    let (branch, head) = expected
+        .map(|expected| (&expected.branch, &expected.head))
+        .unwrap_or((&original.branch, &original.head));
+    if original.branch != *branch || original.head != *head {
+        return Err(
+            "The branch or commit changed. Review the current branch before pushing.".into(),
+        );
+    }
+    require_clean(&original)?;
+    if original.upstream_gone {
         return Err("The upstream branch was deleted. Create a new branch before publishing; Reponiq will not recreate it silently.".into());
     }
-    let remote = remote(&s)?.to_string();
-    git(path, &["fetch", "--prune", &remote])?;
+    let destination = remote(&original)?.to_string();
+    git(path, &["fetch", "--prune", &destination])?;
     let s = state(path)?;
+    if s.branch != *branch
+        || s.head != *head
+        || remote(&s)? != destination
+        || s.upstream != original.upstream
+        || s.remote_ref != original.remote_ref
+    {
+        return Err(
+            "The branch, commit, or upstream changed. Review the current branch before pushing."
+                .into(),
+        );
+    }
     require_clean(&s)?;
     if s.upstream_gone {
         return Err("The upstream branch was deleted. Create a new branch before publishing; Reponiq will not recreate it silently.".into());
@@ -193,8 +259,10 @@ pub(super) fn push(path: &Path) -> Result<String, String> {
             "The remote has changes you do not have. Pull or merge upstream before pushing.".into(),
         );
     }
-    branch_name(&s.branch)?;
-    let target = s.remote_ref.as_deref().unwrap_or("");
+    branch_name(branch)?;
+    let oid = head.as_deref().ok_or("Create a commit before pushing.")?;
+    let local_target = format!("refs/heads/{branch}");
+    let target = s.remote_ref.as_deref().unwrap_or(&local_target);
     if s.upstream.is_some() {
         if !target.starts_with("refs/heads/") {
             return Err(
@@ -202,20 +270,29 @@ pub(super) fn push(path: &Path) -> Result<String, String> {
                     .into(),
             );
         }
-        git(path, &["push", "--", &remote, &format!("HEAD:{target}")])?;
-    } else {
-        git(
+    }
+    git(
+        path,
+        &["push", "--", &destination, &format!("{oid}:{target}")],
+    )?;
+    published(oid);
+    if s.upstream.is_none()
+        && git(
             path,
             &[
-                "push",
-                "--set-upstream",
+                "branch",
+                &format!("--set-upstream-to={destination}/{branch}"),
                 "--",
-                &remote,
-                &format!("{}:refs/heads/{}", s.branch, s.branch),
+                branch,
             ],
-        )?;
+        )
+        .is_err()
+    {
+        return Ok(format!(
+            "Pushed {branch} to {destination}. Git could not set tracking for this branch."
+        ));
     }
-    Ok(format!("Pushed {} to {remote}.", s.branch))
+    Ok(format!("Pushed {branch} to {destination}."))
 }
 pub(super) fn file_path(file: &str) -> Result<(), String> {
     if file.is_empty()
@@ -236,10 +313,7 @@ pub(super) fn file_path(file: &str) -> Result<(), String> {
 }
 pub(super) fn stage_file(path: &Path, file: &str, stage: bool) -> Result<String, String> {
     file_path(file)?;
-    let changes = parse_changes(&git(
-        path,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
-    )?);
+    let changes = commit_changes(path)?;
     let change = changes
         .iter()
         .find(|c| c.path == file)
@@ -262,6 +336,127 @@ pub(super) fn stage_file(path: &Path, file: &str, stage: bool) -> Result<String,
     };
     args.extend(names);
     git(path, &args)
+}
+pub(super) fn commit_changes(path: &Path) -> Result<Vec<Change>, String> {
+    let raw = git_exact(
+        path,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    )?;
+    Ok(parse_changes(&raw))
+}
+
+fn nul_paths<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<u8> {
+    let mut result = Vec::new();
+    for path in paths {
+        result.extend_from_slice(path.as_bytes());
+        result.push(0);
+    }
+    result
+}
+
+pub(super) fn commit_paths(path: &Path, message: &str, files: &[String]) -> Result<String, String> {
+    for file in files {
+        file_path(file)?;
+    }
+    let state = state(path)?;
+    if state.operation.is_some() || !state.conflicts.is_empty() {
+        return Err("Use Continue to finish the current Git operation.".into());
+    }
+    let changes = commit_changes(path)?;
+    let selected: BTreeSet<_> = files.iter().map(String::as_str).collect();
+    let changed: BTreeSet<_> = changes.iter().map(|change| change.path.as_str()).collect();
+    if !selected.is_subset(&changed) {
+        return Err(
+            "The changed files list is out of date. Review the files and try again.".into(),
+        );
+    }
+
+    let mut commit_paths = selected.clone();
+    let mut untracked = BTreeSet::new();
+    for change in changes
+        .iter()
+        .filter(|change| selected.contains(change.path.as_str()))
+    {
+        if change.x == "?" {
+            untracked.insert(change.path.as_str());
+        }
+        if let Some(original) = change
+            .original_path
+            .as_deref()
+            .filter(|_| change.x == "R" || change.y == "R")
+        {
+            file_path(original)?;
+            if changed.contains(original) && !selected.contains(original) {
+                return Err(
+                    "Select both paths of the renamed file to commit them together.".into(),
+                );
+            }
+            commit_paths.insert(original);
+        }
+    }
+    let excluded: BTreeSet<_> = changes
+        .iter()
+        .filter(|change| !selected.contains(change.path.as_str()))
+        .flat_map(|change| [Some(change.path.as_str()), change.original_path.as_deref()])
+        .flatten()
+        .filter(|path| !commit_paths.contains(path))
+        .map(|path| path.trim_end_matches('/'))
+        .collect();
+    for path in &commit_paths {
+        let path = path.trim_end_matches('/');
+        let prefix = format!("{path}/");
+        let descendant = excluded
+            .range(prefix.as_str()..)
+            .next()
+            .is_some_and(|candidate| candidate.starts_with(&prefix));
+        let ancestor =
+            std::iter::successors(path.rsplit_once('/').map(|(parent, _)| parent), |parent| {
+                parent.rsplit_once('/').map(|(ancestor, _)| ancestor)
+            })
+            .any(|parent| excluded.contains(parent));
+        if descendant || ancestor {
+            return Err(
+                "Include both the file and the affected folder paths to commit this replacement."
+                    .into(),
+            );
+        }
+    }
+    let specs = nul_paths(commit_paths);
+    let result = (|| {
+        // New files need intent-to-add entries for a path-limited commit.
+        // Leave these markers on failure so cleanup cannot remove staging
+        // written concurrently by another Git process.
+        if !untracked.is_empty() {
+            git_with_input(
+                path,
+                &[
+                    "--literal-pathspecs",
+                    "add",
+                    "--intent-to-add",
+                    "--pathspec-from-file=-",
+                    "--pathspec-file-nul",
+                ],
+                &nul_paths(untracked.iter().copied()),
+            )?;
+        }
+        git_with_input(
+            path,
+            &[
+                "--literal-pathspecs",
+                "-c",
+                "core.editor=true",
+                "commit",
+                "--only",
+                "-m",
+                message,
+                "--pathspec-from-file=-",
+                "--pathspec-file-nul",
+            ],
+            &specs,
+        )
+    })();
+
+    result
 }
 pub(super) fn continue_operation(path: &Path, abort: bool) -> Result<String, String> {
     let s = state(path)?;
@@ -590,6 +785,51 @@ pub(super) fn resolve_delete(path: &Path, file: &str, expected: &str) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn branch_switch_stashes_and_restores_index_and_untracked_files() {
+        let repo = tempfile::tempdir().unwrap();
+        let path = repo.path();
+        git(path, &["init", "-b", "main"]).unwrap();
+        git(
+            path,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.test",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ],
+        )
+        .unwrap();
+        git(path, &["branch", "topic"]).unwrap();
+        std::fs::write(path.join("staged"), "staged").unwrap();
+        std::fs::write(path.join("untracked"), "untracked").unwrap();
+        git(path, &["add", "staged"]).unwrap();
+
+        super::super::branches::switch(path, "refs/heads/topic", "stash").unwrap();
+        assert_eq!(state(path).unwrap().branch, "topic");
+        assert_eq!(state(path).unwrap().dirty, 0);
+        super::super::branches::switch(path, "refs/heads/main", "clean").unwrap();
+        let saved = super::super::branches::saved_changes(path, "main").unwrap();
+        super::super::branches::restore(path, &saved[0].oid).unwrap();
+        assert_eq!(state(path).unwrap().staged, 1);
+        assert_eq!(
+            std::fs::read_to_string(path.join("untracked")).unwrap(),
+            "untracked"
+        );
+        assert_eq!(
+            super::super::branches::saved_changes(path, "main")
+                .unwrap()
+                .len(),
+            1
+        );
+    }
     fn configure(path: &Path) {
         git(path, &["config", "user.name", "Reponiq fixture"]).unwrap();
         git(path, &["config", "user.email", "test@example.invalid"]).unwrap();

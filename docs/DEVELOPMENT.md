@@ -20,7 +20,7 @@ Version the npm package/lockfile, Cargo manifest/lockfile, and Tauri configurati
 
 Push the reviewed source before creating the matching version tag (currently `v1.0.1`). Tags must match the application version and descend from `origin/main`. Collect both platform artifacts from the same commit, combine checksums, finish the full candidate-bound security audit and applicable release checks, then publish the GitHub release with those exact files. CI cannot publish a release. Do not advertise unbuilt formats or substitute source ZIPs for installers.
 
-Release signing and automatic updates are not configured. Native builds, installed/runtime evidence, visual review, and publication are tracked separately in [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
+Version 1.1 supports signed updates for Windows NSIS and Linux AppImage. See [the offline signing workflow](../CONTRIBUTING.md#signed-updates). Native builds, installed/runtime evidence, visual review, and publication are tracked separately in [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
 
 ## Ownership
 

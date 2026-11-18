@@ -1,6 +1,6 @@
 [package]
 name = "reponiq"
-version = "1.0.1"
+version = "1.1.0"
 description = "Local-first Git and GitHub dashboard"
 authors = ["Reponiq Contributors"]
 edition = "2021"
@@ -31,6 +31,7 @@ cap-fs-ext = "=4.0.3"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tokio = { version = "1", features = ["sync", "macros"] }
+tauri-plugin-updater = { version = "=2.14.1", default-features = false, features = ["rustls-tls", "system-proxy"] }
 
 [profile.release]
 lto = "thin"
@@ -38,4 +39,5 @@ codegen-units = 1
 strip = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = {version="0.61.2",features=["Wdk_Foundation","Wdk_Storage_FileSystem","Win32_Foundation","Win32_Storage_FileSystem","Win32_System_IO","Win32_System_Kernel","Win32_Security","Win32_Security_Authorization","Win32_System_Threading"]}
+winreg = "=0.56.0"
+windows-sys = {version="0.61.2",features= ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Kernel", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading"] }
