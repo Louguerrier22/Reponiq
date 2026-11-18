@@ -28,6 +28,7 @@ struct Staged {
 struct Pending {
     checking: bool,
     installing: bool,
+    install_failed: bool,
     staged: Option<Staged>,
 }
 
@@ -247,7 +248,7 @@ fn begin_install(app: &AppHandle, restart: bool) -> Result<bool, String> {
     if pending.installing {
         return Ok(true);
     }
-    if pending.staged.is_none() {
+    if pending.staged.is_none() || (!restart && pending.install_failed) {
         return Ok(false);
     }
     let permit = Installation::start()?;
@@ -264,10 +265,11 @@ fn begin_install(app: &AppHandle, restart: bool) -> Result<bool, String> {
                 if let Ok(mut pending) = app.state::<Updates>().0.lock() {
                     pending.staged = Some(staged);
                     pending.installing = false;
+                    pending.install_failed = true;
                 }
                 let _ = app.emit(
                     "app-update-error",
-                    "The update could not be installed. Try again in App updates.",
+                    "The update could not be installed. Retry in App updates or close Reponiq to leave it for the next launch.",
                 );
             }
         }
