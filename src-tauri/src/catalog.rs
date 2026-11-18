@@ -262,6 +262,7 @@ impl NewDirectory {
         )?;
         Ok(Repo {
             id,
+            registration: super::workflow::registration(&db, id)?,
             path,
             name,
             github_full_name: remote_url.as_deref().and_then(super::full_name),
@@ -298,6 +299,8 @@ fn clone_local(
         true,
         Some(target.dir()),
         credentials,
+        false,
+        None,
     )
     .map_err(|error| format!("{error} Partial files are preserved; inspect the destination before retrying with a new folder name."))?;
     Ok(target)
@@ -458,6 +461,7 @@ pub async fn create_repository(
     input: Create,
     state: tauri::State<'_, State>,
 ) -> Result<Created, String> {
+    let _update = super::updater::workspace_job()?;
     name_valid(&input.name)?;
     let _account_guard = oauth::ACCOUNT_LOCK.lock().await;
     let remote = if let Some(id) = input.account_id {
@@ -716,8 +720,9 @@ mod tests {
             "example"
         );
         assert_eq!(
-            git(&cloned.path, &["remote", "get-url", "origin"]).unwrap(),
-            source.to_str().unwrap()
+            std::fs::canonicalize(git(&cloned.path, &["remote", "get-url", "origin"]).unwrap())
+                .unwrap(),
+            std::fs::canonicalize(&source).unwrap()
         );
         let state = State {
             database: std::sync::Arc::new(std::sync::Mutex::new(
@@ -738,7 +743,7 @@ mod tests {
         let authenticated = clone_local(
             p.path().to_str().unwrap(),
             "account-copy",
-            source.to_str().unwrap(),
+            p.path().join("source").to_str().unwrap(),
             Some(&credentials),
         )
         .unwrap();

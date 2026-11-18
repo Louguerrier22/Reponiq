@@ -39,6 +39,9 @@ for name,version,license,source,refs,authors in entries:
  lines.extend([f'{name} {version}',f'License: {license}',f'Source: {source}'])
  if authors:lines.append('Authors: '+'; '.join(authors))
  lines.extend(['License texts: '+(', '.join(refs) if refs else 'See versioned upstream source.'),''])
+lines+=['ADAPTED UI COMPONENTS', '', 'shadcn-svelte (MIT), adapted for the Reponiq theme.',
+        'Source: https://github.com/huntabyte/shadcn-svelte/tree/c3b21a62055c7d7b97a220eb5a9efb4d1b7fc8fc/docs/src/lib/registry/ui',
+        Path('src/lib/ui/LICENSE.shadcn-svelte.md').read_text(encoding='utf-8').strip(), '']
 lines+=['PLATFORM MARKS', '', Path('assets/platforms/README.md').read_text(encoding='utf-8'), '']
 for asset_license in ['GITEA-LICENSE.txt', 'CC0-LICENSE.txt']:
  lines += [asset_license, Path('assets/platforms', asset_license).read_text(encoding='utf-8'), '']

@@ -10,16 +10,21 @@ use tauri::{
     tray::{TrayIconBuilder, TrayIconEvent},
     Manager,
 };
+mod branches;
 mod catalog;
 mod conflict_file;
 mod create_directory;
 mod diagnostics;
 mod git_auth;
 mod gitflow;
+mod launch_settings;
 mod oauth;
 mod pulls;
+mod repo_actions;
 mod startup;
 mod storage;
+mod updater;
+mod workflow;
 mod workspace;
 
 #[derive(Clone)]
@@ -31,10 +36,14 @@ struct State {
 struct GitExpectation {
     branch: String,
     head: Option<String>,
+    path: Option<String>,
+    author: Option<String>,
+    registration: Option<String>,
 }
 #[derive(Serialize, Clone)]
 struct Repo {
     id: i64,
+    registration: Option<String>,
     path: String,
     name: String,
     remote_url: Option<String>,
@@ -69,7 +78,8 @@ struct Change {
 struct Details {
     commits: Vec<Commit>,
     changes: Vec<Change>,
-    branches: Vec<String>,
+    branches: Vec<branches::Branch>,
+    saved_changes: Vec<branches::SavedChanges>,
     git: gitflow::GitState,
 }
 #[derive(Serialize)]
@@ -123,6 +133,7 @@ fn initialize(database: &Path) -> Result<Connection, String> {
        CREATE TABLE IF NOT EXISTS preferences(key TEXT PRIMARY KEY, value TEXT NOT NULL);
        CREATE TABLE IF NOT EXISTS accounts(id INTEGER PRIMARY KEY, login TEXT NOT NULL, api_host TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(login,api_host));
        CREATE INDEX IF NOT EXISTS idx_activity_date ON activity(occurred_at DESC);").map_err(err)?;
+    workflow::initialize(&db)?;
     {
         let mut stmt = db
             .prepare("SELECT id,remote_url FROM repos WHERE remote_url IS NOT NULL")
@@ -192,14 +203,35 @@ fn git_binary() -> Result<PathBuf, String> {
 fn git(path: &Path, args: &[&str]) -> Result<String, String> {
     git_capture(path, args, true)
 }
+fn git_with_input(path: &Path, args: &[&str], input: &[u8]) -> Result<String, String> {
+    git_capture_impl(path, args, true, None, None, false, Some(input))
+}
 fn git_exact(path: &Path, args: &[&str]) -> Result<String, String> {
     git_capture(path, args, false)
 }
 fn git_capture(path: &Path, args: &[&str], trim: bool) -> Result<String, String> {
-    git_capture_impl(path, args, trim, None, None)
+    git_capture_impl(path, args, trim, None, None, false, None)
 }
 fn git_bound(path: &Path, directory: &cap_std::fs::Dir, args: &[&str]) -> Result<String, String> {
-    git_capture_impl(path, args, true, Some(directory), None)
+    git_capture_impl(path, args, true, Some(directory), None, false, None)
+}
+fn git_startup_fetch(path: &Path) -> Result<String, String> {
+    git_capture_impl(
+        path,
+        &[
+            "fetch",
+            "--all",
+            "--prune",
+            "--no-prune-tags",
+            "--no-tags",
+            "--no-recurse-submodules",
+        ],
+        true,
+        None,
+        None,
+        true,
+        None,
+    )
 }
 fn git_capture_impl(
     path: &Path,
@@ -207,6 +239,8 @@ fn git_capture_impl(
     trim: bool,
     directory: Option<&cap_std::fs::Dir>,
     credentials: Option<&git_auth::CloneAuthentication>,
+    quiet_startup: bool,
+    input: Option<&[u8]>,
 ) -> Result<String, String> {
     use std::io::{Read, Seek, SeekFrom};
     use std::process::Stdio;
@@ -226,6 +260,13 @@ fn git_capture_impl(
     let mut command = Command::new(git_binary()?);
     if let Some(credentials) = credentials {
         credentials.configure(&mut command);
+    }
+    if quiet_startup {
+        command
+            .args(["-c", "core.askPass="])
+            .env("GIT_ASKPASS", "")
+            .env("SSH_ASKPASS", "")
+            .env("SSH_ASKPASS_REQUIRE", "never");
     }
     if let Some(directory) = directory {
         #[cfg(target_os = "linux")]
@@ -255,9 +296,18 @@ fn git_capture_impl(
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GCM_INTERACTIVE", "never")
-        .stdin(Stdio::null())
         .stdout(stdout.try_clone().map_err(err)?)
         .stderr(stderr.try_clone().map_err(err)?);
+    let stdin = if let Some(input) = input {
+        use std::io::Write;
+        let mut file = tempfile::tempfile().map_err(err)?;
+        file.write_all(input).map_err(err)?;
+        file.seek(SeekFrom::Start(0)).map_err(err)?;
+        Stdio::from(file)
+    } else {
+        Stdio::null()
+    };
+    command.stdin(stdin);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -306,12 +356,45 @@ fn git_capture_impl(
         if diagnostic.contains("detected dubious ownership") {
             return Err("Git does not trust this folder's ownership. Check its owner and approve only this trusted repository in Git before importing.".into());
         }
+        let lower = diagnostic.to_ascii_lowercase();
+        if matches!(operation, "fetch" | "push" | "ls-remote") {
+            if lower.contains("authentication failed")
+                || lower.contains("could not read username")
+                || lower.contains("permission denied (publickey")
+            {
+                return Err(
+                    "Git could not authenticate. Check your system Git credentials or SSH key."
+                        .into(),
+                );
+            }
+            if lower.contains("could not resolve host")
+                || lower.contains("failed to connect")
+                || lower.contains("connection timed out")
+            {
+                return Err(
+                    "Could not connect to the Git remote. Check your connection or VPN and retry."
+                        .into(),
+                );
+            }
+        }
         if cloning {
             return Err(clone_failure(
                 &diagnostic,
                 credentials.is_some_and(git_auth::CloneAuthentication::uses_account),
             )
             .into());
+        }
+        if args.first() == Some(&"switch") {
+            if diagnostic.contains("already checked out at")
+                || diagnostic.contains("already used by worktree")
+            {
+                return Err("This branch is open in another worktree. Open that folder or switch its branch first.".into());
+            }
+            if diagnostic.contains("would be overwritten by checkout")
+                || diagnostic.contains("would be overwritten by switch")
+            {
+                return Err("Switching would overwrite working files. Review your changes and move any obstructing ignored files before trying again.".into());
+            }
         }
         return Err(format!("Git exited with status {}. Check repository access, branch state, and system Git credentials.",status.code().unwrap_or(-1)));
     }
@@ -529,6 +612,7 @@ fn repository_metadata(
     let github_full_name = remote_url.as_deref().and_then(full_name);
     Repo {
         id,
+        registration: None,
         path,
         name,
         remote_url,
@@ -549,31 +633,62 @@ fn repository_metadata(
 #[derive(Serialize)]
 struct RepoSummary {
     id: i64,
+    path: String,
     branch: String,
     dirty: usize,
     ahead: i64,
     behind: i64,
     status_error: Option<String>,
+    conflicts: usize,
+    missing: bool,
 }
 fn repo_summary_impl(id: i64, state: &State) -> Result<RepoSummary, String> {
     let path = repo_path(&*state.database.lock().map_err(err)?, id)?;
-    let (branch, dirty, ahead, behind, status_error) = match status(&path) {
-        Ok((b, d, a, z)) => (b, d, a, z, None),
-        Err(e) => ("Unavailable".into(), 0, 0, 0, Some(e)),
+    let missing = matches!(path.try_exists(), Ok(false));
+    let result = if missing {
+        Err("The repository folder is missing.".into())
+    } else {
+        git(
+            &path,
+            &[
+                "status",
+                "--porcelain=v2",
+                "--branch",
+                "--untracked-files=normal",
+            ],
+        )
     };
-    Ok(RepoSummary {
+    let conflicts = result
+        .as_ref()
+        .map(|raw| raw.lines().filter(|line| line.starts_with("u ")).count())
+        .unwrap_or(0);
+    let (branch, dirty, ahead, behind, status_error) =
+        match result.and_then(|raw| parse_status_with_head(&raw)) {
+            Ok((b, d, a, z, _)) => (b, d, a, z, None),
+            Err(e) => ("Unavailable".into(), 0, 0, 0, Some(e)),
+        };
+    let summary = RepoSummary {
         id,
+        path: path.to_string_lossy().into_owned(),
         branch,
         dirty,
         ahead,
         behind,
         status_error,
-    })
+        conflicts,
+        missing,
+    };
+    if summary.status_error.is_none() {
+        if let Ok(db) = state.database.lock() {
+            let _ = workflow::cache_status(&db, &summary);
+        }
+    }
+    Ok(summary)
 }
 
 fn list_repos_impl(state: &State) -> Result<Vec<Repo>, String> {
     let db = state.database.lock().map_err(err)?;
-    let mut stmt=db.prepare("SELECT id,path,name,remote_url,pinned,collection,tags,ci_status,ci_conclusion FROM repos ORDER BY pinned DESC,name COLLATE NOCASE").map_err(err)?;
+    let mut stmt=db.prepare("SELECT r.id,path,name,remote_url,pinned,collection,tags,ci_status,ci_conclusion,w.token FROM repos r LEFT JOIN workflow_registrations w ON w.repo_id=r.id ORDER BY pinned DESC,name COLLATE NOCASE").map_err(err)?;
     let rows = stmt
         .query_map([], |r| {
             Ok((
@@ -586,6 +701,7 @@ fn list_repos_impl(state: &State) -> Result<Vec<Repo>, String> {
                 r.get::<_, String>(6)?,
                 r.get::<_, Option<String>>(7)?,
                 r.get::<_, Option<String>>(8)?,
+                r.get::<_, Option<String>>(9)?,
             ))
         })
         .map_err(err)?;
@@ -594,10 +710,10 @@ fn list_repos_impl(state: &State) -> Result<Vec<Repo>, String> {
     drop(db);
     let mut result = Vec::new();
     for row in rows.into_iter().map(Ok::<_, rusqlite::Error>) {
-        let (id, path, name, remote, pin, col, tags, cs, cc) = row.map_err(err)?;
-        result.push(repository_metadata(
-            id, path, name, remote, pin, col, tags, cs, cc,
-        ));
+        let (id, path, name, remote, pin, col, tags, cs, cc, registration) = row.map_err(err)?;
+        let mut repo = repository_metadata(id, path, name, remote, pin, col, tags, cs, cc);
+        repo.registration = registration;
+        result.push(repo);
     }
     Ok(result)
 }
@@ -627,10 +743,13 @@ fn add_repo_impl(path: String, state: &State) -> Result<Repo, String> {
         Some(&name),
         now(),
     )?;
+    let registration = workflow::registration(&db, row.0)?;
     drop(db);
-    Ok(build_repo(
+    let mut repo = build_repo(
         row.0, canonical, row.1, row.2, row.3, row.4, row.5, row.6, row.7,
-    ))
+    );
+    repo.registration = registration;
+    Ok(repo)
 }
 fn remove_repo_impl(id: i64, state: &State) -> Result<(), String> {
     state
@@ -642,16 +761,7 @@ fn remove_repo_impl(id: i64, state: &State) -> Result<(), String> {
     Ok(())
 }
 fn pin_repo_impl(id: i64, pinned: bool, state: &State) -> Result<(), String> {
-    state
-        .database
-        .lock()
-        .map_err(err)?
-        .execute(
-            "UPDATE repos SET pinned=?1 WHERE id=?2",
-            params![pinned, id],
-        )
-        .map_err(err)?;
-    Ok(())
+    workflow::pin(&mut *state.database.lock().map_err(err)?, id, pinned)
 }
 fn organize_repo_impl(
     id: i64,
@@ -707,20 +817,16 @@ fn repo_details_impl(id: i64, state: &State) -> Result<Details, String> {
             })
         })
         .collect();
-    let raw = git(
-        &path,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
-    )?;
-    let changes = parse_changes(&raw);
-    let branches = git(&path, &["branch", "--format=%(refname:short)"])?
-        .lines()
-        .map(String::from)
-        .collect();
+    let changes = gitflow::commit_changes(&path)?;
+    let git = gitflow::state(&path)?;
+    let branches = branches::list(&path, &git.remotes)?;
+    let saved_changes = branches::saved_changes(&path, &git.branch)?;
     Ok(Details {
         commits,
         changes,
         branches,
-        git: gitflow::state(&path)?,
+        saved_changes,
+        git,
     })
 }
 fn parse_changes(raw: &str) -> Vec<Change> {
@@ -817,7 +923,33 @@ fn git_action_impl(
 ) -> Result<String, String> {
     let _mutation = gitflow::MUTATIONS.lock().map_err(err)?;
     let path = repo_path(&*state.database.lock().map_err(err)?, id)?;
+    if matches!(path.try_exists(), Ok(false)) {
+        return Err("The repository folder is missing. Use Locate folder.".into());
+    }
+    let repository = gitflow::repository_lock(&path)?;
+    let _repository_guard = repository.try_lock().map_err(|_| {
+        "This repository is fetching in the background. Try again when the fetch finishes."
+    })?;
     if let Some(expected) = expected {
+        if let Some(token) = &expected.registration {
+            if workflow::registration(&*state.database.lock().map_err(err)?, id)?.as_ref()
+                != Some(token)
+            {
+                return Err(
+                    "The repository registration changed. Refresh the repository and try again."
+                        .into(),
+                );
+            }
+        }
+        if expected
+            .path
+            .as_deref()
+            .is_some_and(|expected| path != Path::new(expected))
+        {
+            return Err(
+                "The repository location changed. Refresh the repository and try again.".into(),
+            );
+        }
         let current = gitflow::state(&path)?;
         if current.branch != expected.branch || current.head != expected.head {
             return Err(
@@ -825,12 +957,34 @@ fn git_action_impl(
                     .into(),
             );
         }
+        if matches!(action.as_str(), "commit" | "commit_paths")
+            && expected.author.as_ref().is_some_and(|author| {
+                repo_actions::effective_author(&path).as_ref() != Some(author)
+            })
+        {
+            return Err(
+                "The Git author changed. Review the current author before committing.".into(),
+            );
+        }
     }
+    let mark_fetch = || {
+        if let Ok(db) = state.database.lock() {
+            let _ = workflow::fetched(&db, id, &path);
+        }
+    };
     let output = match action.as_str() {
-        "fetch" if args.is_empty() => gitflow::fetch(&path),
-        "pull" if args.is_empty() => gitflow::pull(&path, false),
-        "merge_upstream" if args.is_empty() => gitflow::pull(&path, true),
-        "push" if args.is_empty() => gitflow::push(&path),
+        "fetch" if args.is_empty() => gitflow::fetch(&path).inspect(|_| mark_fetch()),
+        "pull" if args.is_empty() => gitflow::pull_recording_fetch(&path, false, mark_fetch),
+        "merge_upstream" if args.is_empty() => {
+            gitflow::pull_recording_fetch(&path, true, mark_fetch)
+        }
+        "push" if args.is_empty() => gitflow::push_recording(&path, |head| {
+            if let Ok(db) = state.database.lock() {
+                if repo_path(&db, id).is_ok_and(|current| current == path) {
+                    let _ = workflow::record_publication(&db, id, head);
+                }
+            }
+        }),
         "stage_file" if args.len() == 1 => gitflow::stage_file(&path, &args[0], true),
         "unstage_file" if args.len() == 1 => gitflow::stage_file(&path, &args[0], false),
         "stage_all" if args.is_empty() => {
@@ -869,17 +1023,31 @@ fn git_action_impl(
             }
             git(&path, &["-c", "core.editor=true", "commit", "-m", &args[0]])
         }
+        "commit_paths" if args.len() > 1 && !args[0].trim().is_empty() && args[0].len() <= 500 => {
+            gitflow::commit_paths(&path, &args[0], &args[1..])
+        }
         "checkout" if args.len() == 1 => {
             gitflow::require_clean(&gitflow::state(&path)?)?;
             branch_name(&args[0])?;
-            git(&path, &["switch", "--", &args[0]])
+            branches::switch(&path, &format!("refs/heads/{}", args[0]), "clean")
         }
+        "switch_branch" if args.len() == 2 => branches::switch(&path, &args[0], &args[1]),
+        "restore_changes" if args.len() == 1 => branches::restore(&path, &args[0]),
         "create_branch" if args.len() == 1 => {
             if gitflow::state(&path)?.operation.is_some() {
                 return Err("Finish or abort the current Git operation first.".into());
             }
             branch_name(&args[0])?;
-            git(&path, &["switch", "-c", &args[0]])
+            git(
+                &path,
+                &[
+                    "switch",
+                    "--no-overwrite-ignore",
+                    "--no-recurse-submodules",
+                    "-c",
+                    &args[0],
+                ],
+            )
         }
         "diff" if args.len() <= 1 => repository_diff(&path, args.first().map(String::as_str)),
         _ => Err("Unsupported Git action or invalid arguments".into()),
@@ -1167,6 +1335,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(updater::Updates::default())
         .manage(oauth::LoginState::default())
         .setup(|app| {
             let storage = storage::resolve(
@@ -1198,7 +1368,11 @@ pub fn run() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        if !updater::apply_on_quit(app) {
+                            app.exit(0);
+                        }
+                    }
                     "show" => {
                         if let Some(w) = app.get_webview_window("main") {
                             let _ = w.show();
@@ -1219,7 +1393,16 @@ pub fn run() {
             log::info!("Workspace, window, and tray initialized");
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" && updater::apply_on_quit(window.app_handle()) {
+                    api.prevent_close();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
+            updater::check_app_update,
+            updater::restart_for_update,
             diagnostics::diagnostics_snapshot,
             diagnostics::diagnostics_write,
             diagnostics::diagnostics_clear,
@@ -1232,6 +1415,26 @@ pub fn run() {
             catalog::clone_repository_url,
             catalog::create_repository,
             workspace::workspace_settings,
+            launch_settings::fetch_settings,
+            launch_settings::save_fetch_settings,
+            launch_settings::launch_fetch,
+            launch_settings::autostart_status,
+            launch_settings::set_autostart,
+            workflow::workflow_app,
+            workflow::save_workflow_app,
+            workflow::list_repo_workflow,
+            workflow::save_repo_workflow,
+            workflow::visit_repo,
+            workflow::move_pin,
+            workflow::read_workflow_draft,
+            workflow::save_workflow_draft,
+            repo_actions::repo_context,
+            repo_actions::set_git_identity,
+            repo_actions::open_repo_location,
+            repo_actions::pick_editor,
+            repo_actions::inspect_repo_location,
+            repo_actions::relink_repo,
+            repo_actions::undo_local_commit,
             workspace::save_workspace_settings,
             workspace::discover_repositories,
             workspace::import_repositories,
@@ -1253,8 +1456,10 @@ pub fn run() {
             pulls::pull_context,
             pulls::list_pull_requests,
             pulls::pull_request_details,
+            pulls::open_pull_check,
             pulls::pull_request_files,
             pulls::pull_request_commits,
+            pulls::compare_pull_branches,
             pulls::create_pull_request,
             pulls::review_pull_request,
             pulls::merge_pull_request,
@@ -1433,6 +1638,73 @@ mod release_tests {
         assert!(parse_changes("bad\0?? \0").is_empty());
     }
     #[test]
+    fn commit_paths_includes_untracked_files_and_preserves_excluded_staging() {
+        let dir = fixture();
+        let path = dir.path();
+        git(path, &["config", "user.name", "Fixture"]).unwrap();
+        git(path, &["config", "user.email", "test@example.invalid"]).unwrap();
+        git(path, &["config", "commit.gpgsign", "false"]).unwrap();
+        let dbdir = tempfile::tempdir().unwrap();
+        let db = initialize(&dbdir.path().join("test.sqlite")).unwrap();
+        db.execute(
+            "INSERT INTO repos(path,name) VALUES(?1,'fixture')",
+            [path.to_string_lossy().as_ref()],
+        )
+        .unwrap();
+        let state = State {
+            database: Arc::new(Mutex::new(db)),
+            credential_service: "reponiq-test",
+        };
+        let commit = |args: &[&str]| {
+            git_action_impl(
+                1,
+                "commit_paths".into(),
+                args.iter().map(ToString::to_string).collect(),
+                None,
+                &state,
+            )
+        };
+
+        std::fs::write(path.join("initial"), "initial").unwrap();
+        std::fs::write(path.join("leave staged"), "staged").unwrap();
+        git(path, &["add", "--", "leave staged"]).unwrap();
+        commit(&["Initial selection", "initial"]).unwrap();
+        assert_eq!(
+            git(path, &["ls-tree", "--name-only", "HEAD"]).unwrap(),
+            "initial"
+        );
+        assert_eq!(
+            git(path, &["diff", "--cached", "--name-only"]).unwrap(),
+            "leave staged"
+        );
+
+        std::fs::create_dir(path.join("nested")).unwrap();
+        std::fs::write(path.join("nested/new.txt"), "nested").unwrap();
+        std::fs::write(path.join("initial"), "updated").unwrap();
+        commit(&["All files", "initial", "leave staged", "nested/new.txt"]).unwrap();
+        assert!(git(path, &["status", "--porcelain"]).unwrap().is_empty());
+        assert_eq!(
+            git(path, &["show", "HEAD:nested/new.txt"]).unwrap(),
+            "nested"
+        );
+
+        git(path, &["mv", "initial", "renamed file"]).unwrap();
+        std::fs::write(path.join("--literal"), "new").unwrap();
+        assert!(commit(&["Stale selection", "missing"]).is_err());
+        git(path, &["config", "user.name", ""]).unwrap();
+        let before = git(path, &["status", "--porcelain=v1"]).unwrap();
+        assert!(commit(&["Failed commit", "renamed file", "--literal"]).is_err());
+        assert_eq!(git(path, &["status", "--porcelain=v1"]).unwrap(), before);
+        git(path, &["config", "user.name", "Fixture"]).unwrap();
+        commit(&["Rename and new file", "renamed file", "--literal"]).unwrap();
+        assert!(git(path, &["status", "--porcelain"]).unwrap().is_empty());
+        assert_eq!(
+            git(path, &["show", "HEAD:renamed file"]).unwrap(),
+            "updated"
+        );
+        assert!(git(path, &["cat-file", "-e", "HEAD:initial"]).is_err());
+    }
+    #[test]
     fn selected_diff_preserves_literal_flag_filename_and_does_not_write_activity() {
         let dir = fixture();
         std::fs::write(dir.path().join("--cached"), "initial\n").unwrap();
@@ -1483,6 +1755,9 @@ mod release_tests {
         let stale = GitExpectation {
             branch: "other-branch".into(),
             head: Some("a".repeat(40)),
+            path: None,
+            author: None,
+            registration: None,
         };
         let error =
             git_action_impl(1, "stage_all".into(), vec![], Some(stale), &state).unwrap_err();
@@ -1530,6 +1805,13 @@ async fn background<T: Send + 'static>(
     state: tauri::State<'_, State>,
     job: impl FnOnce(&State) -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
+    background_job(state, job, false).await
+}
+async fn background_job<T: Send + 'static>(
+    state: tauri::State<'_, State>,
+    job: impl FnOnce(&State) -> Result<T, String> + Send + 'static,
+    low_priority: bool,
+) -> Result<T, String> {
     use std::sync::atomic::Ordering;
     ACTIVE_JOBS
         .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
@@ -1542,6 +1824,8 @@ async fn background<T: Send + 'static>(
         .map_err(|_| "Workspace is busy. Try again in a moment.".to_string())?;
     static WORKERS: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
         std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(4)));
+    static PASSIVE: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
+        std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(3)));
     struct Admission;
     impl Drop for Admission {
         fn drop(&mut self) {
@@ -1549,6 +1833,19 @@ async fn background<T: Send + 'static>(
         }
     }
     let admission = Admission;
+    let update_guard = updater::workspace_job()?;
+    // Shelf status and launch fetches leave a worker available for user actions.
+    let passive = if low_priority {
+        Some(
+            PASSIVE
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| "Background workers are unavailable.")?,
+        )
+    } else {
+        None
+    };
     let permit = WORKERS
         .clone()
         .acquire_owned()
@@ -1557,6 +1854,8 @@ async fn background<T: Send + 'static>(
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _admission = admission;
+        let _update_guard = update_guard;
+        let _passive = passive;
         let _permit = permit;
         let result = job(&state);
         if let Err(error) = &result {
@@ -1573,7 +1872,7 @@ async fn list_repos(state: tauri::State<'_, State>) -> Result<Vec<Repo>, String>
 }
 #[tauri::command]
 async fn repo_summary(id: i64, state: tauri::State<'_, State>) -> Result<RepoSummary, String> {
-    background(state, move |s| repo_summary_impl(id, s)).await
+    background_job(state, move |s| repo_summary_impl(id, s), true).await
 }
 #[tauri::command]
 async fn add_repo(path: String, state: tauri::State<'_, State>) -> Result<Repo, String> {
@@ -1614,11 +1913,12 @@ async fn git_action(
     args: Vec<String>,
     expected: Option<GitExpectation>,
     state: tauri::State<'_, State>,
-) -> Result<String, String> {
+) -> Result<String, repo_actions::GitFailure> {
     background(state, move |state| {
         git_action_impl(id, action, args, expected, state)
     })
     .await
+    .map_err(repo_actions::GitFailure::new)
 }
 #[tauri::command]
 async fn get_activity(state: tauri::State<'_, State>) -> Result<Vec<Activity>, String> {

@@ -51,6 +51,8 @@ pub struct Check {
     name: String,
     status: String,
     conclusion: Option<String>,
+    #[serde(default, rename(deserialize = "html_url", serialize = "web_url"))]
+    web_url: Option<String>,
 }
 #[derive(Deserialize)]
 struct CheckRuns {
@@ -120,6 +122,13 @@ pub(super) async fn json_response<T: DeserializeOwned>(
 ) -> Result<(T, bool), String> {
     let mut response = request.send().await.map_err(|error| {
         log::error!(target: "reponiq::github", "Request failed: {error}");
+        #[cfg(test)]
+        if error
+            .url()
+            .is_some_and(|url| url.host_str() == Some("127.0.0.1"))
+        {
+            return format!("GitHub fixture transport failed: {error:?}");
+        }
         "Could not reach GitHub. Check your connection and refresh before retrying an action."
             .to_string()
     })?;
@@ -158,6 +167,31 @@ struct Api {
     #[cfg(test)]
     test_base: Option<String>,
 }
+
+#[derive(Deserialize)]
+struct PublishedBranch {
+    commit: PublishedCommit,
+}
+
+#[derive(Deserialize, Serialize)]
+struct PublishedCommit {
+    sha: String,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct PullComparison {
+    base_commit: PublishedCommit,
+    ahead_by: u64,
+    behind_by: u64,
+    files: Vec<ComparisonFile>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct ComparisonFile {
+    filename: String,
+    status: String,
+}
+
 impl Api {
     async fn request<T: DeserializeOwned>(
         &self,
@@ -191,6 +225,29 @@ impl Api {
     async fn pull(&self, number: u64) -> Result<Pull, String> {
         number_valid(number)?;
         self.get(&format!("/pulls/{number}")).await
+    }
+    async fn published_tip(&self, branch: &str) -> Result<String, String> {
+        let encoded = url::form_urlencoded::byte_serialize(branch.as_bytes()).collect::<String>();
+        let branch: PublishedBranch = self.get(&format!("/branches/{encoded}")).await?;
+        hash_valid(&branch.commit.sha)?;
+        Ok(branch.commit.sha)
+    }
+    async fn published_branch(&self, head: &str, expected: &str) -> Result<(), String> {
+        if self.published_tip(head).await? != expected {
+            return Err("The published branch changed. Fetch and review it before creating the pull request.".into());
+        }
+        Ok(())
+    }
+    async fn create_from_comparison(&self, input: &CreatePull) -> Result<Pull, String> {
+        self.published_branch(&input.head, &input.expected_head)
+            .await?;
+        if self.published_tip(&input.base).await? != input.expected_base {
+            return Err("The base branch changed. Compare the branches again before creating the pull request.".into());
+        }
+        self.request(
+            reqwest::Method::POST, "/pulls",
+            Some(json!({"title":input.title.trim(),"body":input.body,"base":input.base,"head":input.head,"draft":input.draft})),
+        ).await.map(|result| result.0)
     }
     async fn checks(&self, sha: &str) -> Result<Checks, String> {
         hash_valid(sha)?;
@@ -348,7 +405,7 @@ pub async fn list_pull_requests(
         return Err("Pull-request paging limit reached.".into());
     }
     let _guard = oauth::ACCOUNT_LOCK.lock().await;
-    let api = api(id, account_id, state).await?;
+    let api = api(id, account_id, state.clone()).await?;
     let (items, has_more) = api
         .request(
             reqwest::Method::GET,
@@ -356,7 +413,72 @@ pub async fn list_pull_requests(
             None,
         )
         .await?;
+    let _ = background(state, move |s| {
+        let db = s.database.lock().map_err(err)?;
+        let login: String = db
+            .query_row(
+                "SELECT login FROM accounts WHERE id=?1",
+                [account_id],
+                |row| row.get(0),
+            )
+            .map_err(err)?;
+        super::workflow::used_pr_account(&db, id, &login)
+    })
+    .await;
     Ok(Page { items, has_more })
+}
+
+fn check_link(full: &str, number: u64, candidate: Option<&str>) -> String {
+    let root = format!("/{full}/");
+    let safe = candidate
+        .and_then(|raw| url::Url::parse(raw).ok())
+        .filter(|url| {
+            url.scheme() == "https"
+                && url.host_str() == Some("github.com")
+                && url.port().is_none()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.path().strip_prefix(&root).is_some_and(|suffix| {
+                    ["actions/runs/", "runs/"].iter().any(|prefix| {
+                        suffix.strip_prefix(prefix).is_some_and(|tail| {
+                            tail.split('/').next().is_some_and(|id| {
+                                !id.is_empty() && id.bytes().all(|ch| ch.is_ascii_digit())
+                            }) && tail.split('/').all(|part| {
+                                !part.is_empty()
+                                    && part
+                                        .bytes()
+                                        .all(|ch| ch.is_ascii_alphanumeric() || ch == b'-')
+                            })
+                        })
+                    })
+                })
+        });
+    safe.map(String::from)
+        .unwrap_or_else(|| format!("https://github.com/{full}/pull/{number}/checks"))
+}
+
+#[tauri::command]
+pub async fn open_pull_check(
+    id: i64,
+    number: u64,
+    web_url: Option<String>,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, State>,
+) -> Result<(), String> {
+    number_valid(number)?;
+    background(state, move |s| {
+        use tauri_plugin_opener::OpenerExt;
+        let path = repo_path(&*s.database.lock().map_err(err)?, id)?;
+        let remote = git(&path, &["remote", "get-url", "origin"])?;
+        let full = full_name(&remote).ok_or("This repository has no GitHub checks page.")?;
+        app.opener()
+            .open_url(
+                check_link(&full, number, web_url.as_deref()),
+                None::<String>,
+            )
+            .map_err(|_| "Could not open the GitHub checks page.".into())
+    })
+    .await
 }
 #[tauri::command]
 pub async fn pull_request_details(
@@ -441,8 +563,37 @@ pub struct CreatePull {
     base: String,
     head: String,
     expected_head: String,
+    expected_base: String,
     draft: bool,
 }
+#[tauri::command]
+pub async fn compare_pull_branches(
+    id: i64,
+    account_id: i64,
+    base: String,
+    head: String,
+    expected_head: String,
+    state: tauri::State<'_, State>,
+) -> Result<PullComparison, String> {
+    branch_name(&base)?;
+    branch_name(&head)?;
+    hash_valid(&expected_head)?;
+    if base == head {
+        return Err("Choose different base and head branches.".into());
+    }
+    let _guard = oauth::ACCOUNT_LOCK.lock().await;
+    let api = api(id, account_id, state).await?;
+    api.published_branch(&head, &expected_head).await?;
+    let encoded_base = url::form_urlencoded::byte_serialize(base.as_bytes()).collect::<String>();
+    let comparison: PullComparison = api
+        .get(&format!(
+            "/compare/{encoded_base}...{expected_head}?page=1&per_page=1"
+        ))
+        .await?;
+    hash_valid(&comparison.base_commit.sha)?;
+    Ok(comparison)
+}
+
 #[tauri::command]
 pub async fn create_pull_request(
     id: i64,
@@ -450,6 +601,7 @@ pub async fn create_pull_request(
     input: CreatePull,
     state: tauri::State<'_, State>,
 ) -> Result<Pull, String> {
+    let _update = super::updater::workspace_job()?;
     if input.title.trim().is_empty() || input.title.len() > 256 || input.body.len() > 20000 {
         return Err(
             "Enter a title under 256 characters and a description under 20,000 characters.".into(),
@@ -458,6 +610,7 @@ pub async fn create_pull_request(
     branch_name(&input.base)?;
     branch_name(&input.head)?;
     hash_valid(&input.expected_head)?;
+    hash_valid(&input.expected_base)?;
     if input.base == input.head {
         return Err("Choose different base and head branches.".into());
     }
@@ -482,24 +635,7 @@ pub async fn create_pull_request(
         Ok(())
     })
     .await?;
-    #[derive(Deserialize)]
-    struct PublishedBranch {
-        commit: PublishedCommit,
-    }
-    #[derive(Deserialize)]
-    struct PublishedCommit {
-        sha: String,
-    }
-    let encoded = url::form_urlencoded::byte_serialize(input.head.as_bytes()).collect::<String>();
-    let branch: PublishedBranch = api.get(&format!("/branches/{encoded}")).await?;
-    if branch.commit.sha != input.expected_head {
-        return Err(
-            "The published branch changed. Fetch and review it before creating the pull request."
-                .into(),
-        );
-    }
-    // GitHub also checks that the selected branch is published; no local changes are uploaded by this API.
-    api.request(reqwest::Method::POST,"/pulls",Some(json!({"title":input.title.trim(),"body":input.body,"base":input.base,"head":input.head,"draft":input.draft}))).await.map(|r|r.0)
+    api.create_from_comparison(&input).await
 }
 fn review_body(event: &str, body: &str) -> Result<(), String> {
     if !matches!(event, "APPROVE" | "REQUEST_CHANGES" | "COMMENT")
@@ -534,6 +670,7 @@ pub async fn review_pull_request(
     body: String,
     state: tauri::State<'_, State>,
 ) -> Result<Review, String> {
+    let _update = super::updater::workspace_job()?;
     review_body(&event, &body)?;
     let _guard = oauth::ACCOUNT_LOCK.lock().await;
     let api = api(id, account_id, state).await?;
@@ -589,6 +726,7 @@ pub async fn merge_pull_request(
     method: String,
     state: tauri::State<'_, State>,
 ) -> Result<String, String> {
+    let _update = super::updater::workspace_job()?;
     let _guard = oauth::ACCOUNT_LOCK.lock().await;
     let api = api(id, account_id, state).await?;
     api.merge(number, &head, &method).await
@@ -597,6 +735,21 @@ pub async fn merge_pull_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_check_links_stay_on_the_repository_and_github() {
+        let fallback = "https://github.com/example/app/pull/7/checks";
+        let run = "https://github.com/example/app/actions/runs/123/job/456";
+        assert_eq!(check_link("example/app", 7, Some(run)), run);
+        for url in [
+            "https://github.com/lookalike/app/actions/runs/123",
+            "https://example.test/example/app/actions/runs/123",
+            "https://github.com/example/app/issues/123",
+            "http://github.com/example/app/actions/runs/123",
+        ] {
+            assert_eq!(check_link("example/app", 7, Some(url)), fallback);
+        }
+    }
     use std::{
         io::{Read, Write},
         net::TcpListener,
@@ -632,6 +785,9 @@ mod tests {
             while !signal.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // Windows accept can inherit the listener's nonblocking
+                        // mode. Wait for the request instead of closing on WouldBlock.
+                        stream.set_nonblocking(false).unwrap();
                         stream
                             .set_read_timeout(Some(Duration::from_secs(2)))
                             .unwrap();
@@ -756,6 +912,42 @@ mod tests {
             .unwrap()
             .contains("Merged pull request #1"));
         assert_eq!(puts.load(Ordering::Acquire), 1);
+    }
+    #[tokio::test]
+    async fn moved_comparison_base_never_reaches_the_create_endpoint() {
+        let _fixture = TRANSPORT_FIXTURE.lock().await;
+        let requests = Arc::new(AtomicUsize::new(0));
+        let count = requests.clone();
+        let server = server(move |headers, _| {
+            let route = headers.lines().next().unwrap();
+            if route.starts_with("POST ") {
+                count.fetch_add(1, Ordering::AcqRel);
+            }
+            let head = if route.contains("/branches/topic ") {
+                "a"
+            } else {
+                "b"
+            };
+            (
+                200,
+                serde_json::to_vec(&json!({"commit":{"sha":head.repeat(40)}})).unwrap(),
+                String::new(),
+            )
+        });
+        let input = CreatePull {
+            title: "Update".into(),
+            body: String::new(),
+            base: "main".into(),
+            head: "topic".into(),
+            expected_head: "a".repeat(40),
+            expected_base: "c".repeat(40),
+            draft: false,
+        };
+        match client(&server).create_from_comparison(&input).await {
+            Ok(_) => panic!("a moved base must block PR creation"),
+            Err(error) => assert!(error.contains("base branch changed"), "{error}"),
+        }
+        assert_eq!(requests.load(Ordering::Acquire), 0);
     }
     #[tokio::test]
     async fn redirects_are_not_followed_and_error_bodies_are_not_exposed() {

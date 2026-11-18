@@ -1,7 +1,7 @@
 {
   "name": "reponiq",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
+    "bits-ui": "2.21.0",
     "lucide-svelte": "^0.468.0",
     "svelte": "^5.0.0"
   },

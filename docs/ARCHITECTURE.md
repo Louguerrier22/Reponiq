@@ -19,6 +19,8 @@ flowchart TD
 
 **Frontend** (`src/App.svelte`, `src/lib/api.ts`): card shelf, collection/search filtering, focused workbench, changed-file selector, bounded read-only diff, pinned items, Git actions, events and settings. No secrets should be persisted in frontend state beyond the active token-entry step.
 
+Shared shadcn-svelte components live in `src/lib/ui`. The owned adaptations use Reponiq's stylesheet for the graphite surfaces, lavender focus and selection, and compact layout. Bits UI handles keyboard and focus behavior for dialogs, checkboxes, tabs and disclosures. Inputs and selects keep browser-native text entry and option picking. Git diffs, repository results and the walkthrough layout are composed in the app with these controls.
+
 **Rust backend** (`src-tauri/src/lib.rs`): Tauri command handlers, local filesystem and Git calls, SQLite persistence, account validation, manual workflow sync and tray setup. `gitflow.rs` owns Git preflight, history, conflict and revert mechanics; `oauth.rs` owns device sign-in/refresh; `pulls.rs` owns bounded GitHub PR APIs; `catalog.rs` owns repository catalogs/create/clone; `conflict_file.rs` owns directory-bound text replacement; `create_directory.rs` owns atomic/private destination creation; `workspace.rs` owns fixed-key preferences and bounded local-client discovery/import. `git` is executed through argument arrays rather than a shell.
 
 **SQLite**: tables `repos`, `accounts`, `activity` (schema initialized in `initialize`). Repo records point to existing local paths, with pinned status, collection, JSON tags, and last observed CI fields. Account records contain login and host, **not tokens**. Activity uses a unique source key to deduplicate observed entries. There is no migration framework yet.
@@ -34,7 +36,7 @@ The consolidated release retains existing repository/account/activity tables. Ne
 - Local commands use a bounded blocking worker pool; shelf metadata reads do not execute Git. repo_summary checks one selected ID outside the database lock. The frontend schedules at most two status requests concurrently; native jobs queue asynchronously with 32 admitted/four executing bounds. All stored rows and unknown preferences remain preserved.
 - Git activity log is limited and not an authoritative audit trail.
 - GitHub sync is manually requested and rate-limit/error handling needs improvement.
-- The tray offers Show and Quit; no background polling or close-to-tray mode yet.
+- The tray offers Show and Quit. Optional launch fetch runs once after the shelf renders, with two concurrent jobs at most. Git operations serialize for worktrees that share a Git directory. Closing the window exits the app.
 - Multiple accounts are stored; PR views explicitly select an account. Git uses separate system credentials.
 
 ## Workbench read contract
@@ -42,6 +44,14 @@ The consolidated release retains existing repository/account/activity tables. Ne
 `git_action` retains its typed IPC shape; `diff` now accepts zero arguments (all changes) or one literal relative filename. Absolute paths, parent traversal, NUL and oversized arguments are rejected before Git starts. Both staged and working-tree diffs disable external diff/text conversion and colors, and remain bounded. Read-only diff requests do not write journal events. Change paths use Git’s NUL-delimited porcelain format, preserving spaces, Unicode and rename destinations. SQLite tables and stored codecs are unchanged.
 
 Frontend selection/diff sequence numbers reject stale responses; changing repositories resets pending diff state and keeps commit drafts scoped to the repository ID during the session. Metadata and command results remain sourced from native IPC; browser layout tests inject synthetic fixtures only in their test harness.
+
+Branch switching uses explicit local and remote refs. Git owns stashes and their recovery copies. The app checks for file collisions before stash and restore. PR creation rechecks the published base and head from the comparison just before requesting creation.
+
+Launch fetch adds two keys to the existing preferences table. Previous binaries write their existing keys individually and preserve the new ones. Sign-in startup lives in the current user's OS startup settings. Disable that registration before rolling back if the older build should no longer open at sign-in.
+
+Workflow preferences, draft scopes, pin order, last-known status, and observed publication tips live in additive SQLite tables. The repo insert trigger assigns a registration token even when an older binary adds a repository. Foreign keys remove the associated records when the registration is removed. Relinking preserves the registration and checks the known remote before updating the path. The previous binary can continue to read and update its existing tables.
+
+Undo checks current remote refs and publication tips recorded by Reponiq. It updates the named local branch only if the expected tip still matches. Git records the previous tip in the reflog, and the index and working files remain in place. Repo status and launch fetch share a limit of three native worker slots so a fourth stays available for user actions.
 
 ## OAuth credential compatibility
 
