@@ -841,6 +841,34 @@ mod tests {
         // Keep the empty test-hook directory out of the working tree.
         std::fs::write(path.join(".git/info/exclude"), ".fixture-hooks/\n").unwrap();
     }
+
+    #[test]
+    fn stash_on_current_branch_preserves_staged_and_new_files() {
+        use super::super::branches::{restore, saved_changes, stash};
+
+        let repo = tempfile::tempdir().unwrap();
+        let path = repo.path();
+        git(path, &["init", "-b", "main"]).unwrap();
+        configure(path);
+        git(path, &["commit", "--allow-empty", "-m", "initial"]).unwrap();
+        assert!(stash(path).is_err());
+
+        std::fs::write(path.join("staged"), "staged").unwrap();
+        std::fs::write(path.join("new"), "new").unwrap();
+        git(path, &["add", "staged"]).unwrap();
+
+        stash(path).unwrap();
+        let current = state(path).unwrap();
+        assert_eq!(current.branch, "main");
+        assert_eq!(current.dirty, 0);
+        let saved = saved_changes(path, "main").unwrap();
+        assert_eq!(saved.len(), 1);
+
+        restore(path, &saved[0].oid).unwrap();
+        assert_eq!(state(path).unwrap().staged, 1);
+        assert_eq!(std::fs::read_to_string(path.join("new")).unwrap(), "new");
+        assert_eq!(saved_changes(path, "main").unwrap().len(), 1);
+    }
     fn fixture() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         git(dir.path(), &["init", "-b", "main"]).unwrap();

@@ -5,7 +5,7 @@
   import type { Branch, RepoDetails } from './api';
   import Modal from './Modal.svelte';
 
-  let {details, busy, error, recentBranches=[],defaultBranch=null,onclose, onswitch, onfetch, oncreate, onrestore,onopenworktree}: {
+  let {details, busy, error, recentBranches=[],defaultBranch=null,onclose, onswitch, onfetch, oncreate,onopenworktree}: {
     details: RepoDetails;
     busy: boolean;
     error: string;
@@ -15,7 +15,6 @@
     onswitch: (branch: Branch, strategy: string) => Promise<boolean>;
     onfetch: () => Promise<boolean>;
     oncreate: () => void;
-    onrestore: (oid: string) => Promise<boolean>;
     onopenworktree:(reference:string)=>void;
   } = $props();
   let query = $state('');
@@ -39,7 +38,6 @@
   }
   async function switchTarget(strategy: string) {
     if (target && await onswitch(target, strategy)) onclose();
-    else target = null;
   }
 </script>
 
@@ -47,15 +45,12 @@
   {#if error}<p class="connection-error" role="alert">{error}</p>{/if}
   {#if busy}<p role="status">Waiting for Git…</p>{/if}
   {#if target}
-    <h2>Switch to {target.name}?</h2>
-    <p>{details.git.staged} staged · {details.changes.filter(file=>file.x!=='?'&&file.y!==' '&&!details.git.conflicts.includes(file.path)).length} unstaged · {details.changes.filter(file=>file.x==='?').length} new paths.</p>
-    <p>A file can contain both staged and unstaged edits. Choose where to keep your work.</p>
+    <h2>Switch to {target.remote ? target.remote + '/' : ''}{target.name}?</h2>
+    <p>{details.git.dirty} changed · {details.git.branch}</p>
     <div class="branch-decisions">
       <Button variant="primary" disabled={busy || blocked || !details.git.has_head || details.git.branch === '(detached)'} onclick={() => switchTarget('stash')}>Stash and switch</Button>
-      <p>Save your edits here and restore them when you return.</p>
-      <Button variant="secondary" disabled={busy || blocked} onclick={() => switchTarget('bring')}>Bring changes</Button>
-      <p>Take your edits to the selected branch if Git can do so safely.</p>
-      <Button class="text-action" disabled={busy} onclick={onclose}>Stay here</Button>
+      <Button variant="secondary" disabled={busy || blocked} onclick={() => switchTarget('bring')}>Switch with changes</Button>
+      <Button class="text-action" disabled={busy} onclick={() => target = null}>Back</Button>
     </div>
   {:else}
     <h2>Switch branch</h2>
@@ -67,26 +62,15 @@
         {@const current = !branch.remote && branch.name === details.git.branch}
         <div class="quick-repo-row">
           <Button class={["commit-choice", {"is-selected": current}]} aria-current={current ? 'true' : undefined} disabled={busy || current || blocked || branch.in_worktree} onclick={() => choose(branch)}>
-            <span><strong>{branch.name}</strong><small>{current ? 'Current branch' : branch.remote ? 'Remote · ' + branch.remote : branch.in_worktree?'Open in another worktree':branch.name===defaultBranch?'Default branch':'Local branch'}</small></span>
+            <span><strong>{branch.remote ? branch.remote + '/' : ''}{branch.name}</strong><small>{current ? 'Current branch' : branch.remote ? 'Remote branch' : branch.in_worktree?'Open in another worktree':branch.name===defaultBranch?'Default branch':'Local branch'}</small></span>
           </Button>
           {#if !current&&branch.in_worktree}<Button variant="secondary" disabled={busy} onclick={()=>onopenworktree(branch.reference)}>Open worktree</Button>{/if}
         </div>
       {:else}
-        <p>No matching branches. Fetch to check for updates from the remote.</p>
+        <p>No matching branches</p>
       {/each}
       {#if filtered.length > visibleCount}<Button variant="secondary" onclick={() => visibleCount += 60}>Show more branches</Button>{/if}
     </div>
-    {#if details.saved_changes.length}
-      <h3>Saved changes on this branch</h3>
-      <p>Restore into a clean working folder. Git keeps a recovery copy.</p>
-      <div class="branch-results">
-        {#each details.saved_changes as entry, index (entry.oid)}
-          <Button variant="secondary" disabled={busy || blocked || !!details.git.dirty} onclick={async () => {if (await onrestore(entry.oid)) onclose();}}>
-            Restore changes · {new Date(entry.timestamp * 1000).toLocaleString()} · {entry.oid.slice(0, 7)}{index === 0 ? ' (latest)' : ''}
-          </Button>
-        {/each}
-      </div>
-    {/if}
     <div class="modal-actions">
       <Button class="text-action" disabled={busy} onclick={onclose}>Close</Button>
       <Button variant="secondary" disabled={busy || !details.git.remotes.length} onclick={onfetch}>Fetch branches</Button>

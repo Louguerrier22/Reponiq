@@ -97,7 +97,7 @@
     <Button variant="primary" onclick={save} disabled={busy}>Save preferences</Button>
   </div>
   {#if target && context}
-    <Collapsible class="workflow-identity">
+    <Collapsible class="workflow-identity" open={!context.author}>
       {#snippet heading()}Git commit author{/snippet}
       <p>{context.author??'Git has no author configured.'}</p>
       <Label>Name<Input bind:value={author} disabled={busy} maxlength={200}/></Label>

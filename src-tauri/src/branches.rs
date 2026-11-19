@@ -124,13 +124,7 @@ pub(super) fn switch(path: &Path, reference: &str, strategy: &str) -> Result<Str
     }
     let stashed = before.dirty > 0 && strategy == "stash";
     if stashed {
-        gitflow::require_clean_head(&before)?;
-        protect_replaced_tracked_paths(path)?;
-        git(path, &["stash", "push", "--include-untracked", "--message", STASH_MESSAGE])
-            .map_err(|e| format!("Could not finish saving changes. Check Changes and saved stashes before retrying. {e}"))?;
-        if gitflow::state(path)?.dirty != 0 {
-            return Err("Some changes could not be stashed. Check Changes and saved stashes before switching.".into());
-        }
+        stash_working_changes(path, &before)?;
     }
     let options = [
         "switch",
@@ -146,7 +140,7 @@ pub(super) fn switch(path: &Path, reference: &str, strategy: &str) -> Result<Str
     }
     git(path, &args).map_err(|error| {
         if stashed {
-            format!("Changes were saved on {}. Switching to {} failed. Choose Restore changes to recover them. {error}", before.branch, target.name)
+            format!("Changes were saved on {}. Switching to {} failed. Close the branch picker and open Saved changes to restore them. {error}", before.branch, target.name)
         } else if before.dirty > 0 {
             format!("Could not bring changes to {}. Stay here, commit, or try Stash and switch. {error}", target.name)
         } else {
@@ -161,6 +155,47 @@ pub(super) fn switch(path: &Path, reference: &str, strategy: &str) -> Result<Str
     } else {
         format!("Switched to {}.", target.name)
     })
+}
+
+pub(super) fn stash(path: &Path) -> Result<String, String> {
+    let before = gitflow::state(path)?;
+    if before.operation.is_some() || !before.conflicts.is_empty() {
+        return Err(
+            "Finish the current Git operation or resolve conflicts before stashing.".into(),
+        );
+    }
+    stash_working_changes(path, &before)?;
+    Ok(format!("Changes saved on {}.", before.branch))
+}
+
+fn stash_working_changes(path: &Path, before: &gitflow::GitState) -> Result<(), String> {
+    gitflow::require_clean_head(before)?;
+    if before.dirty == 0 {
+        return Err("There are no changes to stash.".into());
+    }
+    protect_replaced_tracked_paths(path)?;
+    git(
+        path,
+        &[
+            "stash",
+            "push",
+            "--include-untracked",
+            "--message",
+            STASH_MESSAGE,
+        ],
+    )
+    .map_err(|e| {
+        format!(
+            "Could not finish saving changes. Check Changes and saved stashes before retrying. {e}"
+        )
+    })?;
+    if gitflow::state(path)?.dirty != 0 {
+        return Err(
+            "Some changes could not be stashed. Check Changes and saved stashes before continuing."
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 fn protect_replaced_tracked_paths(path: &Path) -> Result<(), String> {

@@ -66,6 +66,7 @@
 
   let showAdd = $state(false);
   let showBranches = $state(false);
+  let showSavedChanges = $state(false);
   let showStartup = $state(false), startupBusy = $state(false);
   let launchFailures = $state<Record<number,string>>({}), retryingLaunchFetch = $state(false);
   let launchBatch = Date.now();
@@ -172,7 +173,20 @@
 
   const current = $derived(repos.find(r => r.id === selected) ?? null);
   const gitState = $derived(details?.git??null);
-  const pushBlocked = $derived(working||!gitState?.has_head||gitState.dirty>0||gitState.operation!==null||gitState.conflicts.length>0||!gitState.remote||gitState.upstream_gone);
+  const canFetch = $derived(!working && !current?.status_error && !!gitState?.remotes.length);
+  const canRestore = $derived(!!gitState && !working && !current?.status_error && !gitState.dirty && !gitState.operation && !gitState.conflicts.length);
+  const canStash = $derived(!!gitState?.has_head && gitState.branch !== '(detached)' && !!gitState.dirty && !working && !current?.status_error && !gitState.operation && !gitState.conflicts.length);
+  const syncAction = $derived.by(() => {
+    if (!gitState?.remotes.length) return null;
+    const { branch, has_head, remote, upstream, upstream_gone, operation, conflicts, dirty, ahead, behind } = gitState;
+    if (has_head && branch !== '(detached)' && remote && !dirty && !operation && !conflicts.length && !upstream_gone) {
+      if (!upstream) return { action: 'push', label: 'Publish branch', icon: ArrowUp };
+      if (ahead && behind) return { action: 'merge_upstream', label: 'Merge upstream', icon: ArrowLeftRight };
+      if (behind) return { action: 'pull', label: 'Pull changes', icon: ArrowDown };
+      if (ahead) return { action: 'push', label: 'Push commits', icon: ArrowUp };
+    }
+    return { action: 'fetch', label: 'Fetch', icon: RefreshCw };
+  });
 
   const visible = $derived(orderRepos(view==='attention'
     ? filteredRepos(repos,query,'all').filter(r=>r.status_error||r.dirty||r.ahead||r.behind||launchFailures[r.id]||r.ci_conclusion==='failure')
@@ -182,16 +196,26 @@
   const activeSettings=$derived(current ? workflowFor(current) : undefined);
   const reviewPaths=$derived(activeSettings?.review_paths??[]);
   const changedFiles=$derived([...new Map((details?.changes ?? []).map(file=>[file.path,file])).values()]);
-  const markedCount=$derived(changedFiles.filter(file=>markedFiles.has(file.path)).length);
   const commitFiles=$derived(changedFiles.filter(file=>selectionMode==='exclude'
     ? !markedFiles.has(file.path)
     : markedFiles.size===0||markedFiles.has(file.path)).map(file=>file.path));
+  const commitFileSet = $derived(new Set(commitFiles));
   const selectionBranch=$derived(gitState?.branch);
   $effect(()=>{selectionBranch;markedFiles=new Set();});
   function markFile(path:string,checked:boolean){
     const next=new Set(markedFiles);
     if(checked)next.add(path);else next.delete(path);
     markedFiles=next;
+  }
+  function fileStatus(index: string, worktree: string, conflicted: boolean) {
+    const code = index + worktree;
+    if (conflicted) return 'Conflict';
+    if (code.includes('R')) return 'Renamed';
+    if (code.includes('C')) return 'Copied';
+    if (code.includes('D')) return 'Deleted';
+    if (code.includes('?') || code.includes('A')) return 'New';
+    if (code.includes('T')) return 'Type changed';
+    return 'Modified';
   }
   const matchingFiles=$derived(changedFiles.filter(file => file.path.toLocaleLowerCase().includes(fileNeedle)));
   const foldedFiles=$derived(matchingFiles.filter(file=>!gitState?.conflicts.includes(file.path) && reviewPaths.some(path=>file.path===path || file.path.startsWith(path.endsWith('/')?path:path+'/'))));
@@ -427,6 +451,7 @@
     },action==='commit_paths'?'Commit created':`Git ${action.replaceAll('_',' ')} completed`,false);
     if(['fetch','pull','merge_upstream'].includes(action))void loadMetadata();
     if(ok&&action==='fetch')delete launchFailures[repo.id];
+    if(ok&&action==='stash_changes'&&current?.id===repo.id&&current.path===repo.path&&current.registration===repo.registration)markedFiles=new Set();
     if(ok&&['switch_branch','create_branch'].includes(action)&&current?.id===repo.id){
       void visit(repo,gitState?.branch??null);
       void readRepoContext(repo);
@@ -538,7 +563,7 @@
 
   }
 
-  function confirmGit(action:string){const labels:{[k:string]:[string,string]}={pull:['Pull changes?','Fetch and fast-forward this branch from its upstream.'],push:['Push branch?','Push the committed branch to its tracking remote.'],merge_upstream:['Merge upstream?','Combine the latest upstream with this branch without rewriting history. Conflicts may need to be resolved.'],abort_operation:['Abort Git operation?','Resolution work from this operation may be discarded. Git will attempt to restore the pre-operation state.'],unstage_all:['Unstage all files?','Keep the working files and remove them from the next commit.']};const label=labels[action];if(label)queueGit(action,...label);else void runGit(action);}
+  function confirmGit(action:string){const labels:{[k:string]:[string,string]}={pull:['Pull changes?','Fetch and fast-forward this branch from its upstream.'],push:gitState?.upstream?['Push commits?','Push the committed branch to its tracking remote.']:['Publish branch?','Push this branch and set up remote tracking.'],merge_upstream:['Merge upstream?','Combine local and remote commits without rewriting history.'],abort_operation:['Abort Git operation?','Resolution work from this operation may be discarded. Git will attempt to restore the pre-operation state.'],unstage_all:['Unstage all files?','Keep the working files and remove them from the next commit.']};const label=labels[action];if(label)queueGit(action,...label);else void runGit(action);}
 
   onMount(()=>{
     void load();
@@ -575,7 +600,7 @@
 
     <Button title="Overview" class={[{"active": view==='all' && selected===null}]} onclick={()=>{selected=null;view='all'}}><LayoutDashboard size={17}/> Overview</Button>
 
-    <Button title="Pinned repositories" class={[{"active": view==='pinned' && selected===null}]} onclick={()=>{selected=null;view='pinned'}}><Pin size={17}/> Pinned <span class="side-count">{pinned}</span></Button>
+    <Button title="Pinned repositories" class={[{"active": view==='pinned' && selected===null}]} onclick={()=>{selected=null;view='pinned'}}><Pin size={17} fill={view === 'pinned' && selected === null ? 'currentColor' : 'none'}/> Pinned <span class="side-count">{pinned}</span></Button>
 
     <Button title="Needs attention" class={[{"active": view==='attention' && selected===null}]} onclick={()=>{selected=null;view='attention'}}><CircleAlert size={17}/> Needs attention <span class="side-count">{attention}</span></Button>
 
@@ -621,11 +646,24 @@
           <section class="workbench-main" aria-label="Git workbench">
             <div class="page-heading workbench-heading">
               <div><Button class="back-link" onclick={()=>{selected=null;details=null}}><ArrowLeftRight size={14}/> All repositories</Button><div class="heading-row"><PlatformIcon remote={current.remote_url} size={25}/><h1>{current.name}</h1></div><p title={current.path}>{current.path}</p></div>
-              <div class="heading-actions"><Button variant="secondary" aria-label={current.pinned?'Unpin repository':'Pin repository'} disabled={pendingPins.includes(current.id)} onclick={()=>togglePin(current)}><Pin size={16}/></Button><Button variant="secondary" disabled={working} onclick={()=>openOrganization(current)}><Tags size={15}/> Organize</Button></div>
+              <div class="heading-actions"><Button variant="secondary" aria-label={current.pinned?'Unpin repository':'Pin repository'} disabled={pendingPins.includes(current.id)} onclick={()=>togglePin(current)}><Pin size={16} fill={current.pinned ? 'currentColor' : 'none'}/></Button><Button variant="secondary" disabled={working} onclick={()=>openOrganization(current)}><Tags size={15}/> Organize</Button></div>
             </div>
             <div class="workbench-tools">
               <Button class="secondary current-branch" aria-label={'Switch branch. Current branch: '+current.branch} disabled={working||!details} onclick={()=>showBranches=true}><GitBranch size={16}/><span>{current.branch}</span></Button>
-              <div class="toolbar"><Button onclick={()=>runGit('fetch')} disabled={working||!!current.status_error||!gitState?.remotes.length}><RefreshCw size={14}/> Fetch</Button><Button onclick={()=>confirmGit('pull')} title={gitState?.upstream??'Publish this branch to set an upstream'} disabled={working||!!current.status_error||!gitState?.upstream||!!gitState?.dirty||!!gitState?.operation}><ArrowDown size={14}/> Pull</Button><Button variant="primary" onclick={()=>confirmGit('push')} title={gitState?.dirty?'Commit all changes before pushing':!gitState?.remote?'No tracking remote configured':'Push committed changes'} disabled={pushBlocked||!!current.status_error}><ArrowUp size={14}/> {gitState?.upstream?'Push':'Publish branch'}</Button></div>
+              {#if details}
+                <div class="toolbar" aria-label="Branch actions">
+                  {#if details.saved_changes.length}<Button variant="secondary" disabled={working} onclick={()=>showSavedChanges=true}>Saved changes ({details.saved_changes.length})</Button>{/if}
+                  {#if canStash}<Button variant="secondary" onclick={()=>runGit('stash_changes')}>Stash changes</Button>{/if}
+                  {#if syncAction}
+                    {#if syncAction.action !== 'fetch'}
+                      <Button variant="secondary" disabled={!canFetch} onclick={()=>runGit('fetch')}><RefreshCw size={14}/> Fetch</Button>
+                    {/if}
+                    <Button variant="primary" disabled={!canFetch} onclick={()=>confirmGit(syncAction!.action)}>
+                      <syncAction.icon size={14}/> {syncAction.label}
+                    </Button>
+                  {/if}
+                </div>
+              {/if}
             </div>
             <Collapsible class="repo-actions">
               {#snippet heading()}Repository actions{/snippet}
@@ -638,28 +676,8 @@
               </div>
             </Collapsible>
             {#if launchFailures[current.id]}<div class="operation-banner" role="status"><p>{launchFailures[current.id]}</p><Button variant="secondary" disabled={retryingLaunchFetch} onclick={()=>retryLaunchFetch(current?.id)}>Retry fetch</Button></div>{/if}
-            <div class="workbench-status"><span class="status-label" class:status-warning={current.dirty>0||current.behind>0||!!current.status_error}><i></i>{current.status_error?'Unavailable':current.dirty?'Changed':'Clean'}</span><span><ArrowUp size={13}/>{current.ahead} ahead</span><span><ArrowDown size={13}/>{current.behind} behind</span>{#if current.ci_conclusion||current.ci_status}<span class="workbench-ci"><PlatformIcon remote="https://github.com" size={14}/>{current.ci_conclusion??current.ci_status}</span>{/if}</div>
-            {#if gitState?.operation||gitState?.conflicts.length}<section class="operation-banner" aria-label="Git operation"><div><strong>{gitState.operation ? gitState.operation+' paused' : 'Resolve conflicting files'}</strong><span>{gitState.conflicts.length?gitState.conflicts.length+' conflicting files':'Conflicts resolved. Continue to finish.'}</span></div>{#if gitState.operation}<div class="toolbar"><Button variant="primary" disabled={working||gitState.conflicts.length>0} onclick={()=>runGit('continue_operation')}>Continue</Button><Button class="secondary dangerous" disabled={working} onclick={()=>confirmGit('abort_operation')}>Abort</Button></div>{/if}</section>{:else if gitState&&gitState.ahead>0&&gitState.behind>0}<section class="operation-banner"><div><strong>Branches have diverged</strong><span>{gitState.ahead} local · {gitState.behind} upstream commits</span></div><Button variant="secondary" disabled={working||gitState.dirty>0} onclick={()=>confirmGit('merge_upstream')}>Merge upstream</Button></section>{/if}
-            {#if gitState && !gitState.operation && !gitState.conflicts.length}
-              <div class="workflow-next" aria-label="Next step">
-                {#if gitState.dirty}
-                  <p>Review your changes, then choose what to commit.</p>
-                  {#if activeTab!=='changes'}<Button variant="secondary" onclick={()=>activeTab='changes'}>Review changes</Button>{/if}
-                {:else if !gitState.has_head}
-                  <p>Add files and create your first commit.</p>
-                {:else if gitState.upstream_gone}
-                  <p>The upstream branch was deleted. Choose a different branch or configure tracking in Git.</p>
-                {:else if !gitState.upstream && gitState.remote && gitState.branch!=='(detached)'}
-                  <p>Publish this branch to share your commits.</p>
-                {:else if gitState.ahead && !gitState.behind}
-                  <p>Push your commits to update the remote branch.</p>
-                {:else if gitState.behind && !gitState.ahead}
-                  <p>Pull to update this branch with the latest remote commits.</p>
-                {:else if current.github_full_name && gitState.upstream && !gitState.ahead && !gitState.behind && activeTab!=='pulls'}
-                  <Button variant="secondary" onclick={()=>activeTab='pulls'}>Open pull requests</Button>
-                {/if}
-              </div>
-            {/if}
+            <div class="workbench-status"><span class="status-label" class:status-warning={current.dirty>0||current.behind>0||!!current.status_error}><i></i>{current.status_error?'Unavailable':current.dirty?`${current.dirty} changed`:'Clean'}</span>{#if current.ahead}<span><ArrowUp size={13}/>{current.ahead} to push</span>{/if}{#if current.behind}<span><ArrowDown size={13}/>{current.behind} to pull</span>{/if}{#if gitState?.upstream_gone}<span>Remote branch deleted</span>{/if}{#if current.ci_conclusion||current.ci_status}<span class="workbench-ci"><PlatformIcon remote="https://github.com" size={14}/>{current.ci_conclusion??current.ci_status}</span>{/if}</div>
+            {#if gitState?.operation||gitState?.conflicts.length}<section class="operation-banner" aria-label="Git operation"><div><strong>{gitState.operation ? gitState.operation+' paused' : 'Resolve conflicting files'}</strong><span>{gitState.conflicts.length?gitState.conflicts.length+' conflicting files':'Conflicts resolved'}</span></div>{#if gitState.operation}<div class="toolbar"><Button variant="primary" disabled={working||gitState.conflicts.length>0} onclick={()=>runGit('continue_operation')}>Continue</Button><Button class="secondary dangerous" disabled={working} onclick={()=>confirmGit('abort_operation')}>Abort</Button></div>{/if}</section>{/if}
             <Tabs.Root bind:value={() => activeTab, (tab) => {
               if (tab === 'changes' || tab === 'history' || tab === 'pulls') activeTab = tab;
             }}>
@@ -678,15 +696,16 @@
                   <div class="panel-title">Changed files <span>{changedFiles.length}</span></div>
                   {#if changedFiles.length}
                     <div class="commit-file-mode" role="group" aria-label="How to treat checked files">
-                      <Button aria-pressed={selectionMode==='include'} disabled={working||!!gitState?.operation} onclick={()=>selectionMode='include'}>Include</Button>
-                      <Button aria-pressed={selectionMode==='exclude'} disabled={working||!!gitState?.operation} onclick={()=>selectionMode='exclude'}>Exclude</Button>
+                      <Button aria-pressed={selectionMode==='include'} disabled={working||!!gitState?.operation} onclick={()=>selectionMode='include'}>Include checked</Button>
+                      <Button aria-pressed={selectionMode==='exclude'} disabled={working||!!gitState?.operation} onclick={()=>selectionMode='exclude'}>Exclude checked</Button>
                     </div>
                   {/if}
                   {#if showFileSearch||changedFiles.length>8}<div class="search-input file-search"><Search size={13}/><Input bind:ref={fileSearch} aria-label="Filter changed files" placeholder="Filter files" bind:value={fileQuery}/></div>{/if}
                   {#if foldedFiles.length&&!fileNeedle}<div class="panel-title">{foldedFiles.length} grouped files <Button class="text-action" onclick={()=>showFolded=!showFolded}>{showFolded?'Collapse group':'Show all'}</Button></div>{/if}
                   <div class="file-list">
                     {#each fileMatches.slice(0,200) as file (file.path)}
-                      <div class="file-change-row"><Checkbox aria-label={(selectionMode==='include'?'Include ':'Exclude ')+file.path} checked={markedFiles.has(file.path)} disabled={working||!!gitState?.operation} onCheckedChange={checked=>markFile(file.path,checked)}/><Button class={["changed-file", {"file-selected": selectedFile===file.path}]} aria-pressed={selectedFile===file.path} title={file.path} onclick={()=>{if(selectedFile!==file.path)void showDiff(file.path,current.id);}}><FileCode size={15}/><span>{file.path}</span><b class:change-added={file.x==='A'||file.x==='?'} class:change-deleted={file.x==='D'||file.y==='D'} class:change-conflict={gitState?.conflicts.includes(file.path)}>{(file.x+file.y).trim()}</b></Button>{#if gitState?.conflicts.includes(file.path)}<Button class="resolve-file" onclick={()=>conflictFile=file.path}>Resolve</Button>{/if}</div>
+                      {@const conflicted = gitState?.conflicts.includes(file.path) ?? false}
+                      <div class="file-change-row"><Checkbox aria-label={(selectionMode==='include'?'Include ':'Exclude ')+file.path} checked={markedFiles.has(file.path)} disabled={working||!!gitState?.operation} onCheckedChange={checked=>markFile(file.path,checked)}/><Button class={["changed-file", {"file-selected": selectedFile===file.path}]} aria-pressed={selectedFile===file.path} title={file.path} onclick={()=>{if(selectedFile!==file.path)void showDiff(file.path,current.id);}}><FileCode size={15}/><span>{file.path}</span><b class:change-added={file.x==='A'||file.x==='?'} class:change-deleted={file.x==='D'||file.y==='D'} class:change-conflict={conflicted}>{fileStatus(file.x, file.y, conflicted)}</b></Button>{#if conflicted}<Button class="resolve-file" onclick={()=>conflictFile=file.path}>Resolve</Button>{/if}</div>
                     {:else}<div class="empty-small"><Check size={17}/>{changedFiles.length?'No matching files':'Working tree clean'}</div>{/each}
                   </div>
                   {#if fileMatches.length>200}<small class="rail-limit">200 of {fileMatches.length} files. Filter to find a file.</small>{/if}
@@ -704,7 +723,11 @@
               </div>
               <div data-tour="commit" class="commit-panel workbench-commit">
                 <div class="commit-heading">Commit changes</div>
-                <p>{repoContext?.author ? 'Committing as '+repoContext.author : 'Set a Git author in Repository settings before committing.'}</p>
+                {#if repoContext?.author}
+                  <p>{repoContext.author}</p>
+                {:else if repoContext}
+                  <Button variant="secondary" disabled={working||!repoMetadataReady||!workflowReady} onclick={()=>showRepoSettings=true}>Set Git author</Button>
+                {/if}
                 {#if recoveredMessage}
                   <Collapsible>
                     {#snippet heading()}Recovered commit message{/snippet}
@@ -714,10 +737,11 @@
                 <Textarea disabled={working||draftLoading} aria-label="Commit message" placeholder="Commit message" value={message} oninput={event=>updateDraft(event.currentTarget.value)} rows={2} maxlength={500}></Textarea>
                 {#if messageTooLong}<p class="connection-error" role="alert">Shorten the commit message to 500 characters before committing.</p>{/if}
                 {#if changedFiles.length}
-                  <p aria-live="polite">{markedFiles.size===0 ? 'No files checked. All changes will be committed, including files hidden by filters.' : selectionMode==='exclude' ? `${markedCount} excluded · ${commitFiles.length} to commit` : markedCount===0 ? 'The selected files have changed. Select files again or clear your selection.' : `${commitFiles.length} selected to commit`}</p>
+                  {@const hidden = commitFiles.length - fileMatches.slice(0, 200).filter(file => commitFileSet.has(file.path)).length}
+                  <p aria-live="polite">{commitFiles.length} of {changedFiles.length} files{hidden > 0 ? ` · ${hidden} hidden` : ''}</p>
                 {/if}
                 <div class="toolbar inner">
-                  {#if markedFiles.size}<Button variant="secondary" onclick={()=>markedFiles=new Set()} disabled={working}>Clear selection</Button>{/if}
+                  {#if markedFiles.size}<Button variant="secondary" onclick={()=>markedFiles=new Set()} disabled={working}>Reset to all files</Button>{/if}
                   <Button variant="primary" onclick={commit} disabled={working||draftLoading||messageTooLong||!message.trim()||!!current.status_error||!commitFiles.length||!!gitState?.operation||!!gitState?.conflicts.length}>Commit {commitFiles.length&&commitFiles.length===changedFiles.length?'all ':''}{commitFiles.length} {commitFiles.length===1?'file':'files'}</Button>
                 </div>
               </div>
@@ -774,7 +798,7 @@
         <div class="repository-shelf" aria-label="Repositories">
           {#each visible.slice((page-1)*pageSize,page*pageSize) as r (r.id)}
             <Card as="article" class="repository-card">
-              <div class="card-heading"><Button class="card-open" onclick={()=>selectRepo(r.id)}><span class="card-icon"><PlatformIcon remote={r.remote_url} size={25}/></span><h2>{r.name}</h2></Button><Button class={["card-pin", {"is-pinned": r.pinned}]} aria-label={r.pinned?'Unpin '+r.name:'Pin '+r.name} title={r.pinned?'Unpin':'Pin'} disabled={pendingPins.includes(r.id)} onclick={()=>togglePin(r)}><Pin size={17}/></Button></div>
+              <div class="card-heading"><Button class="card-open" onclick={()=>selectRepo(r.id)}><span class="card-icon"><PlatformIcon remote={r.remote_url} size={25}/></span><h2>{r.name}</h2></Button><Button class={["card-pin", {"is-pinned": r.pinned}]} aria-label={r.pinned?'Unpin '+r.name:'Pin '+r.name} title={r.pinned?'Unpin':'Pin'} disabled={pendingPins.includes(r.id)} onclick={()=>togglePin(r)}><Pin size={17} fill={r.pinned ? 'currentColor' : 'none'}/></Button></div>
               <p class="card-path" title={r.path}><span class="platform-name">{remoteInfo(r.remote_url).label}</span> · {remoteInfo(r.remote_url).project||short(r.path,64)}</p>
               <div class="card-state"><span class="card-branch" title={r.branch}><GitBranch size={14}/>{r.branch||'—'}</span>{#if r.status_pending}<span class="pill">Checking…</span>{:else if r.missing}<span class="pill red">Folder missing</span>{:else if r.status_error}<span class="pill red" title={r.status_error}>Status unavailable</span>{:else if r.conflicts}<span class="pill red">Conflicts to resolve</span>{:else if r.dirty>0}<span class="pill yellow">{r.dirty} changed</span>{:else if r.ci_conclusion==='failure'}<span class="pill red">CI failed</span>{:else if r.ahead>0&&r.behind===0}<span class="pill yellow">Ready to push</span>{:else}<span class="pill green"><Check size={12}/> Clean</span>{/if}</div>
               <div class="card-counts"><span><ArrowUp size={13}/>{r.ahead} ahead</span><span><ArrowDown size={13}/>{r.behind} behind</span>{#if r.collection}<span class="card-collection" title={r.collection}>{r.collection}</span>{/if}</div>
@@ -817,7 +841,23 @@
 {#if showWalkthrough}<Walkthrough hasRepo={repos.length>0} prepare={prepareTour} onclose={()=>showWalkthrough=false}/>{/if}
 {#if showLiveLogs}<LiveLogs onclose={()=>showLiveLogs=false}/>{/if}
 
-{#if showBranches && details}<Branches {details} {error} {recentBranches} defaultBranch={repoContext?.default_branch??null} busy={working} onclose={()=>showBranches=false} onswitch={(branch,strategy)=>runGit('switch_branch',[branch.reference,strategy])} onfetch={()=>runGit('fetch')} oncreate={()=>{showBranches=false;newBranch='';showBranch=true;}} onrestore={(oid)=>runGit('restore_changes',[oid])} onopenworktree={reference=>{if(current)void openLocation(current,'worktree',reference);}}/>{/if}
+{#if showBranches && details}<Branches {details} {error} {recentBranches} defaultBranch={repoContext?.default_branch??null} busy={working} onclose={()=>showBranches=false} onswitch={(branch,strategy)=>runGit('switch_branch',[branch.reference,strategy])} onfetch={()=>runGit('fetch')} oncreate={()=>{showBranches=false;newBranch='';showBranch=true;}} onopenworktree={reference=>{if(current)void openLocation(current,'worktree',reference);}}/>{/if}
+
+{#if showSavedChanges && details}
+  <Modal label="Saved changes" canClose={!working} onclose={()=>showSavedChanges=false}>
+    <h2>Saved changes</h2>
+    <p>{details.git.branch}{#if details.git.dirty} · Working files changed{/if}</p>
+    {#if error}<p class="connection-error" role="alert">{error}</p>{/if}
+    <div class="branch-results">
+      {#each details.saved_changes as entry, index (entry.oid)}
+        <div class="quick-repo-row"><span>{index === 0 ? 'Latest · ' : ''}{new Date(entry.timestamp * 1000).toLocaleString()} · {entry.oid.slice(0, 7)}</span>
+          <Button variant="secondary" aria-label={'Restore saved changes '+entry.oid.slice(0, 7)} disabled={!canRestore} onclick={async()=>{if(await runGit('restore_changes',[entry.oid]))showSavedChanges=false;}}>Restore</Button>
+        </div>
+      {/each}
+    </div>
+    <div class="modal-actions"><Button variant="secondary" disabled={working} onclick={()=>showSavedChanges=false}>Close</Button></div>
+  </Modal>
+{/if}
 {#if showQuick}<QuickSwitch repos={orderRepos(repos)} {metadata} canOpen={!working} onselect={repo=>{showQuick=false;void selectRepo(repo.id);}} onclose={()=>showQuick=false} onmove={arrangePin} onlocation={(repo,action)=>{showQuick=false;void openLocation(repo,action);}}/>{/if}
 {#if showRepoSettings&&current}
   <Modal label="Repository settings" onclose={()=>showRepoSettings=false}>
