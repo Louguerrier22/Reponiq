@@ -287,13 +287,87 @@ pub(super) fn restart_for_update(app: AppHandle) -> Result<(), String> {
     }
 }
 
-/// Returns true when quit was deferred to the updater or blocked by active work.
-pub(super) fn apply_on_quit(app: &AppHandle) -> bool {
+#[derive(Default, PartialEq, Eq)]
+enum QuitState {
+    #[default]
+    Starting,
+    Ready(u32),
+    SavingDrafts(u32),
+}
+
+#[derive(Default)]
+pub(super) struct QuitHandler(Mutex<QuitState>);
+
+#[tauri::command]
+pub(super) fn register_app_quit_handler(app: AppHandle) -> Result<(), String> {
+    let handler = app.state::<QuitHandler>();
+    let mut state = handler.0.lock().map_err(super::err)?;
+    if *state == QuitState::Starting {
+        *state = QuitState::Ready(0);
+    }
+    Ok(())
+}
+
+pub(super) fn request_quit(app: &AppHandle) {
+    let handler = app.state::<QuitHandler>();
+    let Ok(mut state) = handler.0.lock() else {
+        return;
+    };
+    match *state {
+        QuitState::Starting => {
+            drop(state);
+            quit_or_update(app);
+        }
+        QuitState::Ready(previous) => {
+            let request = previous.wrapping_add(1);
+            *state = QuitState::SavingDrafts(request);
+            if let Err(error) = app.emit("app-quit-requested", request) {
+                *state = QuitState::Ready(request);
+                log::error!("Could not request a draft flush before quitting: {error}");
+                return;
+            }
+            drop(state);
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(15)).await;
+                if complete_quit_request(&app, request).unwrap_or(false) {
+                    let _ = app.emit("app-quit-timed-out", request);
+                }
+            });
+        }
+        QuitState::SavingDrafts(_) => {}
+    }
+}
+
+#[tauri::command]
+pub(super) fn finish_app_quit(
+    app: AppHandle,
+    request: u32,
+    drafts_saved: bool,
+) -> Result<bool, String> {
+    let accepted = complete_quit_request(&app, request)?;
+    if accepted && drafts_saved {
+        quit_or_update(&app);
+    }
+    Ok(accepted)
+}
+
+fn complete_quit_request(app: &AppHandle, request: u32) -> Result<bool, String> {
+    let handler = app.state::<QuitHandler>();
+    let mut state = handler.0.lock().map_err(super::err)?;
+    if *state != QuitState::SavingDrafts(request) {
+        return Ok(false);
+    }
+    *state = QuitState::Ready(request);
+    Ok(true)
+}
+
+fn quit_or_update(app: &AppHandle) {
     match begin_install(app, false) {
-        Ok(deferred) => deferred,
+        Ok(false) => app.exit(0),
+        Ok(true) => {}
         Err(error) => {
             let _ = app.emit("app-update-error", error);
-            true
         }
     }
 }
