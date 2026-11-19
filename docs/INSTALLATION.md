@@ -2,7 +2,7 @@
 
 [Documentation](README.md) · [User guide](USER_GUIDE.md) · [Troubleshooting](TROUBLESHOOTING.md)
 
-Reponiq targets Windows 10/11 x64 and Linux x64. Install Git and download the installer and `SHA256SUMS.txt` from the [latest release](https://github.com/Louguerrier22/Reponiq/releases/latest). Substitute your downloaded filename in the examples below. The app uses WebView2 on Windows and WebKitGTK 4.1 on Linux.
+Reponiq targets Windows 10/11 x64 and Linux x64. Install Git and make sure it is on your PATH. Restart Reponiq after changing PATH. Download the installer and `SHA256SUMS.txt` from the [latest release](https://github.com/Louguerrier22/Reponiq/releases/latest). Substitute your downloaded filename in the examples below. The app uses WebView2 on Windows and WebKitGTK 4.1 on Linux.
 
 ## Windows
 
