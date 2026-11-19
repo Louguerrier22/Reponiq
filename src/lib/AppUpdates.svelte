@@ -42,13 +42,67 @@
   }
 
   onMount(() => {
+    let quitRequest: number | undefined;
+    let frozenDialogs: HTMLDialogElement[] = [];
+    function resumeAfterQuit(request: number) {
+      if (quitRequest !== request) return;
+      quitRequest = undefined;
+      for (const dialog of frozenDialogs) dialog.inert = false;
+      frozenDialogs = [];
+      document.body.inert = false;
+    }
     const subscription = listen<string>('app-update-error', event => {
       error = event.payload;
       installing = false;
       open = true;
+      if (quitRequest !== undefined) resumeAfterQuit(quitRequest);
+    }).catch(() => undefined);
+    const quitTimeout = listen<number>('app-quit-timed-out', ({ payload: request }) => {
+      if (quitRequest !== request) return;
+      resumeAfterQuit(request);
+      error = 'Saving drafts took too long. Reponiq is still open. Try quitting again.';
+      open = true;
+    }).catch(() => undefined);
+    const quitSubscription = listen<number>('app-quit-requested', async ({ payload: request }) => {
+      if (quitRequest !== undefined) resumeAfterQuit(quitRequest);
+      quitRequest = request;
+      document.body.inert = true;
+      // Native modal dialogs escape inertness inherited from the document body.
+      frozenDialogs = [...document.querySelectorAll<HTMLDialogElement>('dialog[open]:not([inert])')];
+      for (const dialog of frozenDialogs) dialog.inert = true;
+      let draftsSaved = false;
+      let accepted = false;
+      try {
+        try {
+          await flushDraftWrites();
+          draftsSaved = true;
+        } catch (reason) {
+          error = `Could not save the latest draft. ${String(reason)}`;
+          open = true;
+        }
+        accepted = await invoke<boolean>('finish_app_quit', { request, draftsSaved });
+      } catch (reason) {
+        error = String(reason);
+        open = true;
+      } finally {
+        if (!accepted || !draftsSaved) resumeAfterQuit(request);
+      }
+    }).then(async unlisten => {
+      try {
+        await invoke('register_app_quit_handler');
+        return unlisten;
+      } catch (reason) {
+        unlisten();
+        throw reason;
+      }
     }).catch(() => undefined);
     void check();
-    return () => { void subscription.then(unlisten => unlisten?.()); };
+    return () => {
+      if (quitRequest !== undefined) resumeAfterQuit(quitRequest);
+      void subscription.then(unlisten => unlisten?.());
+      void quitTimeout.then(unlisten => unlisten?.());
+      void quitSubscription.then(unlisten => unlisten?.());
+    };
   });
 </script>
 

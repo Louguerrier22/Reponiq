@@ -1351,6 +1351,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(updater::Updates::default())
+        .manage(updater::QuitHandler::default())
         .manage(oauth::LoginState::default())
         .setup(|app| {
             let storage = storage::resolve(
@@ -1382,11 +1383,7 @@ pub fn run() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "quit" => {
-                        if !updater::apply_on_quit(app) {
-                            app.exit(0);
-                        }
-                    }
+                    "quit" => updater::request_quit(app),
                     "show" => {
                         if let Some(w) = app.get_webview_window("main") {
                             let _ = w.show();
@@ -1409,14 +1406,17 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" && updater::apply_on_quit(window.app_handle()) {
+                if window.label() == "main" {
                     api.prevent_close();
+                    updater::request_quit(window.app_handle());
                 }
             }
         })
         .invoke_handler(tauri::generate_handler![
             updater::check_app_update,
             updater::restart_for_update,
+            updater::register_app_quit_handler,
+            updater::finish_app_quit,
             diagnostics::diagnostics_snapshot,
             diagnostics::diagnostics_write,
             diagnostics::diagnostics_clear,
