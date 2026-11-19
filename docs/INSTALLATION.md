@@ -2,43 +2,43 @@
 
 [Documentation](README.md) · [User guide](USER_GUIDE.md) · [Troubleshooting](TROUBLESHOOTING.md)
 
-Reponiq 1.0 targets Windows 10/11 x64 and Linux x64. A Git installation on your PATH is required. The native app uses WebView2 on Windows and WebKitGTK 4.1 on Linux; it does not bundle Chromium or require a browser tab.
+Reponiq targets Windows 10/11 x64 and Linux x64. Install Git and download the installer and `SHA256SUMS.txt` from the [latest release](https://github.com/Louguerrier22/Reponiq/releases/latest). Substitute your downloaded filename in the examples below. The app uses WebView2 on Windows and WebKitGTK 4.1 on Linux.
 
 ## Windows
 
-Download `Reponiq-1.0.1-windows-x64.exe` and `SHA256SUMS.txt` from the same GitHub release. Verify the checksum in PowerShell:
+Choose the Windows `.exe` installer and verify its checksum in PowerShell:
 
 ```powershell
-Get-FileHash .\Reponiq-1.0.1-windows-x64.exe -Algorithm SHA256
+Get-FileHash .\Reponiq-1.1.0-windows-x64.exe -Algorithm SHA256
 ```
 
-Compare the printed hash with the exact filename’s entry in `SHA256SUMS.txt`. Run the installer and use its per-user installation flow. The installer uses the WebView2 bootstrapper if WebView2 is absent, so a first install may require internet access. No Microsoft Authenticode certificate is configured for v1; the publisher is not digitally certified.
+Compare the printed hash with the exact filename’s entry in `SHA256SUMS.txt`. Run the installer and select **Create desktop shortcut** on the final screen if you want one. To pin Reponiq, open the app, right-click its Windows taskbar icon, and choose **Pin to taskbar**. The installer uses the WebView2 bootstrapper if WebView2 is absent. No Microsoft Authenticode certificate is configured for v1.
 
 ## Linux
 
 Download the package for your distribution and verify it against the release checksum file:
 
 ```bash
-sha256sum Reponiq-1.0.1-linux-x64.deb
+sha256sum Reponiq-1.1.0-linux-x64.deb
 ```
 
 Debian/Ubuntu:
 
 ```bash
-sudo apt install ./Reponiq-1.0.1-linux-x64.deb
+sudo apt install ./Reponiq-1.1.0-linux-x64.deb
 ```
 
 Fedora/RHEL family:
 
 ```bash
-sudo dnf install ./Reponiq-1.0.1-linux-x64.rpm
+sudo dnf install ./Reponiq-1.1.0-linux-x64.rpm
 ```
 
 AppImage:
 
 ```bash
-chmod +x Reponiq-1.0.1-linux-x64.AppImage
-./Reponiq-1.0.1-linux-x64.AppImage
+chmod +x Reponiq-1.1.0-linux-x64.AppImage
+./Reponiq-1.1.0-linux-x64.AppImage
 ```
 
 The AppImage may require FUSE 2; consult your distribution’s package manager. A desktop Secret Service provider such as GNOME Keyring or KWallet is needed for saved GitHub tokens. Run the app as your normal desktop user. Wayland/X11 session integration and package dependencies vary by distribution; check the release’s tested-platform record.

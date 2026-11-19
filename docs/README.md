@@ -1,6 +1,6 @@
 # Reponiq documentation
 
-[Home](../README.md) · [Download v1](https://github.com/Louguerrier22/Reponiq/releases/tag/v1.0.1) · [Changelog](../CHANGELOG.md)
+[Home](../README.md) · [Latest release](https://github.com/Louguerrier22/Reponiq/releases/latest) · [Changelog](../CHANGELOG.md)
 
 ## Start here
 
@@ -18,4 +18,4 @@
 
 [Development](DEVELOPMENT.md) · [Architecture](ARCHITECTURE.md) · [Performance](PERFORMANCE.md) · [Release verification](RELEASE_CHECKLIST.md) · [Roadmap](ROADMAP.md)
 
-These documents describe version 1.0.1 unless explicitly marked as a historical release record. Screenshots are captures of the actual application using disposable examples. No personal workspace or credentials are used in documentation images.
+The workflow guides describe version 1.1. Screenshots may show earlier versions and use disposable examples.

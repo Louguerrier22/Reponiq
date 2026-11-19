@@ -2,7 +2,7 @@
 <h1 align="center">Reponiq</h1>
 <p align="center">Your repositories. One focused workspace.</p>
 <p align="center">
-<a href="https://github.com/Louguerrier22/Reponiq/releases/tag/v1.0.1"><img alt="Version 1.0.1" src="https://img.shields.io/badge/version-1.0.1-a99bff?style=flat-square"></a>
+<a href="https://github.com/Louguerrier22/Reponiq/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Louguerrier22/Reponiq?color=a99bff&style=flat-square"></a>
 <a href="https://github.com/Louguerrier22/Reponiq/actions/workflows/ci.yml"><img alt="Build status" src="https://github.com/Louguerrier22/Reponiq/actions/workflows/ci.yml/badge.svg"></a>
 <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-a99bff?style=flat-square"></a>
 </p>
@@ -18,10 +18,12 @@ A native desktop Git workspace for Windows and Linux. Organize projects, review 
 
 | Platform | Installer | Runtime |
 | --- | --- | --- |
-| Windows 10/11 x64 | [Windows installer](https://github.com/Louguerrier22/Reponiq/releases/download/v1.0.1/Reponiq-1.0.1-windows-x64.exe) | Microsoft WebView2 |
-| Ubuntu / Debian x64 | [Debian package](https://github.com/Louguerrier22/Reponiq/releases/download/v1.0.1/Reponiq-1.0.1-linux-x64.deb) | WebKitGTK 4.1 |
-| Fedora / RHEL family x64 | [RPM package](https://github.com/Louguerrier22/Reponiq/releases/download/v1.0.1/Reponiq-1.0.1-linux-x64.rpm) | WebKitGTK 4.1 |
-| Other Linux x64 | [AppImage](https://github.com/Louguerrier22/Reponiq/releases/download/v1.0.1/Reponiq-1.0.1-linux-x64.AppImage) | WebKitGTK 4.1 / FUSE support |
+| Windows 10/11 x64 | Windows installer (.exe) | Microsoft WebView2 |
+| Ubuntu / Debian x64 | Debian package (.deb) | WebKitGTK 4.1 |
+| Fedora / RHEL family x64 | RPM package (.rpm) | WebKitGTK 4.1 |
+| Other Linux x64 | AppImage | WebKitGTK 4.1 / FUSE support |
+
+Download your installer and its checksum file from the [latest release](https://github.com/Louguerrier22/Reponiq/releases/latest).
 
 Install [Git](https://git-scm.com/downloads) first. See [installation and checksum verification](docs/INSTALLATION.md) for prerequisites. Reponiq 1.1 prepares signed updates on Windows and for Linux AppImage builds. Availability and tested limits are recorded in [release verification](docs/RELEASE_CHECKLIST.md).
 
@@ -29,9 +31,9 @@ Install [Git](https://git-scm.com/downloads) first. See [installation and checks
 
 **Start your project.** Create a local or GitHub repository, add an existing folder, or clone from a connected account. Pin projects, group them into collections and add tags with Enter.
 
-**Review, then commit.** Select a file for its diff. Stage individual files and split work into separate commits. Inspect older commits and their files, or undo one with a new revert commit.
+**Review, then commit.** Select a file for its diff. Commit all changes, or use Include checked and Exclude checked to split work into separate commits. Inspect older commits and their files, or create a revert commit.
 
-**Keep branches moving.** Search local and fetched branches. Bring your edits along or stash them before switching, then restore them when you return. Fetch, pull with fast-forward protection and push committed work.
+**Keep branches moving.** Search local and fetched branches. Switch with your edits or stash them before switching. Open Saved changes to restore a stash. The workbench shows the available sync action for your branch.
 
 **Work with pull requests.** Connect GitHub in your browser. Compare a published branch before opening a PR. Read patches, check the results, submit a review and merge when GitHub allows it.
 

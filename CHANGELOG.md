@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.0
+
+- Commit all changes by default, or include or exclude checked files. The workbench shows the commit scope and offers direct access to the Git author fields when needed.
+- Switch with edits, stash before switching, or stash on the current branch. Restore from Saved changes and use the sync action shown for the current branch.
+- Reuse saved drafts, personalize launch fetch and sign-in startup, and keep project pins visible with solid pin icons.
+- Windows and Linux AppImage prepare signed updates in the background. Install 1.1.0 manually when upgrading from 1.0.x.
+
 ## 1.0.1 — 2026-11-06
 
 The repository shelf loads saved metadata before background Git checks. Pinning and organization update only the affected entry; local status refreshes automatically on focus and during idle use, with manual refresh buttons removed. Native work queues small bursts instead of rejecting the fifth request as busy.

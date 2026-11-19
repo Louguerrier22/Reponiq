@@ -1045,6 +1045,7 @@ fn git_action_impl(
             branches::switch(&path, &format!("refs/heads/{}", args[0]), "clean")
         }
         "switch_branch" if args.len() == 2 => branches::switch(&path, &args[0], &args[1]),
+        "stash_changes" if args.is_empty() => branches::stash(&path),
         "restore_changes" if args.len() == 1 => branches::restore(&path, &args[0]),
         "create_branch" if args.len() == 1 => {
             if gitflow::state(&path)?.operation.is_some() {

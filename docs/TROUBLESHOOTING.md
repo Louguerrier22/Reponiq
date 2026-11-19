@@ -47,7 +47,7 @@ Include app version, operating system, the action and a redacted error. Remove r
 
 If GitHub shows a branch that Reponiq does not list, open the branch picker, select **Fetch branches**, then search again. Check the remote label if several remotes have the same branch. For a local branch in use by another worktree, open that worktree or switch it away from the branch using Git. If Git reports that switching would overwrite a file, stay on the current branch and commit or stash your edits. Move an obstructing ignored file yourself before retrying.
 
-If switching fails after stashing, return to the original branch and look under **Saved changes on this branch**. If restoring reports conflicts, inspect and resolve them in **Changes** before continuing work. The original stash stays available in the branch picker and in `git stash list`. Inspect any partially restored files before trying again.
+If switching fails after stashing, close the branch picker and open **Saved changes** on the original branch. If restoring reports conflicts, review any partially restored files and resolve conflicts in **Changes** before retrying. The recovery copy stays in **Saved changes** and in `git stash list`.
 
 If **Fetch on launch** fails, verify network access and system Git credentials, then use **Retry fetch**. Repositories configured to fetch into local branches or tags require explicit manual Fetch. If sign-in startup is unavailable, check OS startup permissions and open the installed app or the original AppImage. Before rolling back to an older build, disable **Start Reponiq at sign-in** in Settings or remove the Reponiq entry using your OS startup settings. The older app can read and write its existing settings while the newer fetch preferences remain saved.
 
