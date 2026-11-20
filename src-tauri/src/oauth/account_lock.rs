@@ -2,11 +2,21 @@ use std::fs::{File, OpenOptions, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tokio::sync::{Mutex, MutexGuard};
 
 const BUSY: &str = "Reponiq is already working with a GitHub account. Try again when it finishes.";
 const UNAVAILABLE: &str = "Could not open Reponiq’s GitHub account lock. Check your user folder permissions and try again.";
+static LOCAL_LOCK: Mutex<()> = Mutex::const_new(());
 
-pub(crate) async fn lock_account() -> Result<File, String> {
+pub(crate) struct AccountGuard {
+    _file: File,
+    _local: MutexGuard<'static, ()>,
+}
+
+pub(crate) async fn lock_account() -> Result<AccountGuard, String> {
+    // Requests inside one instance queue as before. Apply the wait limit only
+    // when a separate process holds the OS lock.
+    let local = LOCAL_LOCK.lock().await;
     let file = tokio::task::spawn_blocking(open_for_login)
         .await
         .map_err(|_| UNAVAILABLE.to_string())?
@@ -14,7 +24,12 @@ pub(crate) async fn lock_account() -> Result<File, String> {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match file.try_lock() {
-                Ok(()) => return Ok(file),
+                Ok(()) => {
+                    return Ok(AccountGuard {
+                        _file: file,
+                        _local: local,
+                    })
+                }
                 Err(TryLockError::WouldBlock) => {
                     tokio::time::sleep(Duration::from_millis(50)).await
                 }
@@ -32,7 +47,7 @@ fn open_for_login() -> io::Result<File> {
     {
         use std::os::fd::AsRawFd;
         let directory =
-            crate::repository_identity::open_directory(&home).map_err(io::Error::other)?;
+            crate::repository_identity::open_login_home(&home).map_err(io::Error::other)?;
         return open(
             &PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()))
                 .join(".reponiq-credentials.lock"),
