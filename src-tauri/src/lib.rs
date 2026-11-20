@@ -478,7 +478,7 @@ fn full_name(remote: &str) -> Option<String> {
     let parts: Vec<_> = path.split('/').collect();
     if parts.len() != 2
         || parts.iter().any(|v| {
-            v.is_empty()
+            matches!(*v, "" | "." | "..")
                 || !v
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
@@ -1514,6 +1514,8 @@ mod tests {
             Some("org/repo".into())
         );
         assert_eq!(full_name("https://example.com/org/repo"), None);
+        assert_eq!(full_name("git@github.com:org/.."), None);
+        assert_eq!(full_name("git@github.com:./repo"), None);
     }
     #[test]
     fn reject_unsafe_branches() {

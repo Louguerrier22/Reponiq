@@ -10,7 +10,7 @@
   import Textarea from './ui/Textarea.svelte';
   import {untrack,onDestroy} from 'svelte';
   import {GitPullRequest,RefreshCw,Plus,Search,FileCode,Check,CircleAlert} from 'lucide-svelte';
-  import {api,type Account,type GitState,type Pull,type PullDetails,type PullFile,type PullCommit,type PullContext,type PullComparison,type Target,type RepoWorkflow} from './api';
+  import {api,type Account,type GitState,type Pull,type PullDetails,type PullFile,type PullCommit,type PullContext,type PullComparison,type Target,type RepoWorkflow,type ReviewedPull,type PullMergeScope} from './api';
   import {draftKey,readDraft,saveDraft,type DraftContext} from './draft-store';
   import DiffView from './DiffView.svelte';
   import Modal from './Modal.svelte';
@@ -33,14 +33,19 @@
   const composeKey=$derived(composeScope&&draftKey(composeScope));
   let comparison=$state<{repo:number;account:number;base:string;branch:string;head:string;result:PullComparison}|null>(null);
   let comparing=$state(false);
-  let pendingMerge=$state<{number:number;head:string;method:string;title:string}|null>(null);
+  let pendingMerge=$state<{review:ReviewedPull;method:string;title:string}|null>(null);
+  let detailScope=$state<ReviewedPull|null>(null);
   let listSequence=0,detailSequence=0,fileSequence=0,alive=true;
   const filtered=$derived(rows.filter(p=>[p.title,p.user.login,String(p.number),p.head.ref,p.base.ref].some(s=>s.toLocaleLowerCase().includes(query.toLocaleLowerCase()))));
   const visibleFiles=$derived(files.filter(f=>f.filename.toLocaleLowerCase().includes(fileQuery.toLocaleLowerCase())));
   const reviews=$derived((detail?.reviews??[]).filter(r=>[r.user.login,r.state,r.body??''].some(s=>s.toLocaleLowerCase().includes(reviewQuery.toLocaleLowerCase()))).slice().reverse());
   const checks=$derived((detail?.checks.runs??[]).filter(c=>[c.name,c.status,c.conclusion??''].some(s=>s.toLocaleLowerCase().includes(checkQuery.toLocaleLowerCase()))));
   const blockedReview=$derived.by(()=>{const latest=new Map<string,string>();for(const r of detail?.reviews??[])if(['APPROVED','CHANGES_REQUESTED','DISMISSED'].includes(r.state))latest.set(r.user.login,r.state);return [...latest.values()].includes('CHANGES_REQUESTED');});
-  const canMerge=$derived(!busy&&!detailLoading&&!!detail&&detail.pull.state==='open'&&!detail.pull.draft&&detail.pull.mergeable===true&&['clean','has_hooks'].includes(detail.pull.mergeable_state??'')&&detail.checks.ready&&detail.checks.complete&&detail.reviews_complete&&!blockedReview&&detail.merge_methods.includes(method));
+  function matchesMergeScope(scope:PullMergeScope|null) {
+    return !!scope?.target.registration && scope.target.id===target.id && scope.target.path===target.path &&
+      scope.target.registration===target.registration && scope.accountId===accountId && scope.accountLogin===account?.login;
+  }
+  const canMerge=$derived(!busy&&!detailLoading&&matchesMergeScope(detailScope)&&!!detail&&detail.pull.state==='open'&&!detail.pull.draft&&detail.pull.mergeable===true&&['clean','has_hooks'].includes(detail.pull.mergeable_state??'')&&detail.checks.ready&&detail.checks.complete&&detail.reviews_complete&&!blockedReview&&detail.merge_methods.includes(method));
   const canCompare=$derived(!busy&&!comparing&&!!git?.head&&!git.dirty&&!git.operation&&!git.conflicts.length&&!!git.upstream&&!git.upstream_gone&&git.ahead===0&&!!base.trim()&&git.branch!==base);
   const currentComparison=$derived(comparison?.repo===repoId&&comparison?.account===accountId&&comparison?.base===base&&comparison?.head===git?.head&&comparison?.branch===git?.branch ? comparison.result : null);
   const canCreate=$derived(canCompare&&!draftLoading&&!!currentComparison?.ahead_by);
@@ -67,14 +72,23 @@
     loading=false;
   }
   async function choose(pull:Pull){
-    const sequence=++detailSequence;const id=repoId,account=accountId;const same=selected?.number===pull.number;selected=pull;detail=null;files=[];selectedFile=null;commits=[];commit='';detailLoading=true;error='';++fileSequence;if(!same){reviewBody='';reviewEvent='COMMENT';}reviewPage=0;checkPage=0;
-    const result=await Promise.allSettled([api.pullDetails(id,account,pull.number),api.pullCommits(id,account,pull.number)]);
-    if(!alive||sequence!==detailSequence)return;
-    if(result[0].status==='fulfilled'){detail=result[0].value;selected=detail.pull;method=detail.merge_methods[0]??'merge';void loadFiles(1);}else error=String(result[0].reason);
-    if(result[1].status==='fulfilled'){commits=result[1].value.items;commitsLimited=result[1].value.has_more;}else error=String(result[1].reason);
-    detailLoading=false;
+    const sequence=++detailSequence;const same=selected?.number===pull.number;selected=pull;detail=null;detailScope=null;files=[];selectedFile=null;commits=[];commitsLimited=false;commit='';detailLoading=true;error='';++fileSequence;if(!same){reviewBody='';reviewEvent='COMMENT';}reviewPage=0;checkPage=0;
+    const scope={target:{...target},accountId,accountLogin:account?.login??''};
+    try {
+      const result=await api.pullDetails(scope,pull.number);
+      if(!alive||sequence!==detailSequence||!matchesMergeScope(scope))return;
+      const reviewed:ReviewedPull={...scope,repository:result.repository,repositoryId:result.repository_id,number:result.pull.number,head:result.pull.head.sha,base:result.pull.base.ref};
+      detailScope=reviewed;detail=result;selected=result.pull;method=result.merge_methods[0]??'merge';
+      void loadFiles(1);
+      const page=await api.pullCommits(reviewed);
+      if(alive&&sequence===detailSequence&&matchesMergeScope(reviewed)){commits=page.items;commitsLimited=page.has_more;}
+    } catch(e) {
+      if(alive&&sequence===detailSequence)error=String(e);
+    } finally {
+      if(alive&&sequence===detailSequence)detailLoading=false;
+    }
   }
-  async function loadFiles(next:number){if(!selected)return;const sequence=++fileSequence;const id=repoId,account=accountId,number=selected.number,sha=commit||null;filesLoading=true;selectedFile=null;fileQuery='';try{const result=await api.pullFiles(id,account,number,next,sha);if(alive&&sequence===fileSequence){files=result.items;moreFiles=result.has_more;filePage=next;selectedFile=files[0]??null;}}catch(e){if(alive&&sequence===fileSequence){files=[];error=String(e);}}finally{if(alive&&sequence===fileSequence)filesLoading=false;}}
+  async function loadFiles(next:number){const reviewed=detailScope;if(!reviewed||!matchesMergeScope(reviewed))return;const sequence=++fileSequence;const sha=commit||null;filesLoading=true;selectedFile=null;fileQuery='';try{const result=await api.pullFiles(reviewed,next,sha);if(alive&&sequence===fileSequence&&matchesMergeScope(reviewed)){files=result.items;moreFiles=result.has_more;filePage=next;selectedFile=files[0]??null;}}catch(e){if(alive&&sequence===fileSequence){files=[];error=String(e);}}finally{if(alive&&sequence===fileSequence)filesLoading=false;}}
   function openCreate() {
     error=''; title=''; body=''; draft=false; comparison=null;
     const preferred=preferences?.preferred_base;
@@ -135,8 +149,23 @@
     } finally {busy=false;}
   }
   async function review(){if(!detail||busy||detailLoading)return;const number=detail.pull.number,head=detail.pull.head.sha,id=repoId,account=accountId,event=reviewEvent,text=reviewBody;busy=true;error='';try{await api.reviewPull(id,account,number,head,event,text);notice='Review submitted for #'+number;reviewBody='';if(selected?.number===number)await choose(selected);}catch(e){error=String(e);}finally{busy=false;}}
-  function confirmMerge(){if(!detail||!canMerge)return;pendingMerge={number:detail.pull.number,head:detail.pull.head.sha,method,title:detail.pull.title};}
-  async function merge(){if(!pendingMerge||busy)return;const snapshot=pendingMerge,id=repoId,account=accountId;busy=true;error='';try{notice=await api.mergePull(id,account,snapshot.number,snapshot.head,snapshot.method)+' Fetch to update your local refs.';pendingMerge=null;onchanged();await loadList(1);}catch(e){const message=String(e);pendingMerge=null;if(selected)await choose(selected);error=message;}finally{busy=false;}}
+  function confirmMerge(){
+    if(!detail||!detailScope||!canMerge)return;
+    pendingMerge={review:$state.snapshot(detailScope),method,title:detail.pull.title};
+  }
+  async function merge(){
+    if(!pendingMerge||busy)return;
+    if(!matchesMergeScope(pendingMerge.review)){
+      pendingMerge=null;
+      error='The repository or GitHub account changed. Reopen the pull request before merging.';
+      return;
+    }
+    const {review,method}=pendingMerge;
+    busy=true;error='';
+    try{notice=await api.mergePull(review,method)+' Fetch to update your local refs.';pendingMerge=null;onchanged();await loadList(1);}
+    catch(e){const message=String(e);pendingMerge=null;if(selected)await choose(selected);error=message;}
+    finally{busy=false;}
+  }
 </script>
 
 <section class="pull-requests" aria-label="Pull requests">
@@ -193,4 +222,4 @@
     </div>
   </Modal>
 {/if}
-{#if pendingMerge}<Modal canClose={!busy} label="Confirm pull request merge" onclose={()=>{if(!busy)pendingMerge=null;}}><h2>Merge #{pendingMerge.number}?</h2><p>{pendingMerge.title}</p><p>Method: {pendingMerge.method} · Head: {pendingMerge.head.slice(0,12)}</p><p>GitHub status and the reviewed commit will be checked again before merging.</p><div class="modal-actions"><Button variant="secondary" disabled={busy} onclick={()=>pendingMerge=null}>Cancel</Button><Button variant="primary" disabled={busy} onclick={merge}>Merge pull request</Button></div></Modal>{/if}
+{#if pendingMerge}<Modal canClose={!busy} label="Confirm pull request merge" onclose={()=>{if(!busy)pendingMerge=null;}}><h2>Merge #{pendingMerge.review.number} into {pendingMerge.review.base}?</h2><p>{pendingMerge.title}</p><p>{pendingMerge.review.repository} · @{pendingMerge.review.accountLogin}</p><p>Method: {pendingMerge.method} · Head: {pendingMerge.review.head.slice(0,12)}</p><div class="modal-actions"><Button variant="secondary" disabled={busy} onclick={()=>pendingMerge=null}>Cancel</Button><Button variant="primary" disabled={busy} onclick={merge}>Merge pull request</Button></div></Modal>{/if}
