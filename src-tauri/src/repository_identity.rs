@@ -107,32 +107,35 @@ fn read_admin_file(directory: &Dir, name: &str) -> Result<Option<String>, String
     Ok(Some(data))
 }
 
-pub(super) fn open_for_git(path: &Path, can_discover: bool) -> Result<Dir, String> {
+pub(super) fn open_for_git(
+    path: &Path,
+    can_discover: bool,
+) -> Result<(Dir, Option<&'static str>), String> {
     let directory = open_directory(path)?;
-    if !verify_admin(path, &directory)? {
-        if !can_discover {
-            // System Git may legitimately address a bare repository, but it
-            // must not fall back to an enclosing repo for normal commands.
-            if !check_admin_file(&directory, "HEAD")?
-                || !directory
-                    .symlink_metadata("objects")
-                    .is_ok_and(|m| m.is_dir())
-            {
-                return Err(MOVED.into());
-            }
-            open_directory(&path.join("objects"))?;
-            check_admin_file(&directory, "config")?;
-            return Ok(directory);
+    if verify_admin(path, &directory)? {
+        return Ok((directory, (!can_discover).then_some(".git")));
+    }
+    if !can_discover {
+        // An explicitly selected bare repository has no .git marker.
+        if !check_admin_file(&directory, "HEAD")?
+            || !directory
+                .symlink_metadata("objects")
+                .is_ok_and(|metadata| metadata.is_dir())
+        {
+            return Err(MOVED.into());
         }
-        // The folder picker accepts a subdirectory. Check the same ancestors
-        // Git can discover before allowing it to read repository configuration.
-        for parent in path.ancestors().skip(1) {
-            if verify_admin(parent, &walk(parent, true)?)? {
-                break;
-            }
+        open_directory(&path.join("objects"))?;
+        check_admin_file(&directory, "config")?;
+        return Ok((directory, Some(".")));
+    }
+    // The folder picker accepts a subdirectory. Check the same ancestors
+    // Git can discover before allowing it to read repository configuration.
+    for parent in path.ancestors().skip(1) {
+        if verify_admin(parent, &walk(parent, true)?)? {
+            break;
         }
     }
-    Ok(directory)
+    Ok((directory, None))
 }
 
 fn verify_admin(path: &Path, directory: &Dir) -> Result<bool, String> {
@@ -217,6 +220,20 @@ pub(super) fn check(db: &Connection, id: i64, path: &Path, rebind: bool) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn damaged_nested_repository_does_not_use_the_outer_checkout() {
+        let parent = tempfile::tempdir().unwrap();
+        let nested = parent.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        for folder in [parent.path(), &nested] {
+            super::super::git(folder, &["init", "--initial-branch=main", "--template="]).unwrap();
+        }
+        assert!(super::super::git(&nested, &["status", "--porcelain"]).is_ok());
+        std::fs::write(nested.join(".git/HEAD"), "incomplete\n").unwrap();
+        assert!(super::super::git(&nested, &["status", "--porcelain"]).is_err());
+        assert!(super::super::git(parent.path(), &["status", "--porcelain"]).is_ok());
+    }
 
     #[test]
     fn ownership_and_permissions_allow_only_trusted_paths() {

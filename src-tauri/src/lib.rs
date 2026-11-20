@@ -289,7 +289,16 @@ fn git_capture_impl(
     let checked_directory = if directory.is_none() {
         let can_discover =
             matches!(operation, "init" | "clone") || args == ["rev-parse", "--show-toplevel"];
-        Some(repository_identity::open_for_git(path, can_discover)?)
+        let (directory, git_dir) = repository_identity::open_for_git(path, can_discover)?;
+        if let Some(git_dir) = git_dir {
+            // Bind commands to this checkout even if its own metadata becomes
+            // invalid. Ordinary Git discovery could select an enclosing repo.
+            command.env("GIT_DIR", git_dir);
+            if git_dir == ".git" {
+                command.env("GIT_WORK_TREE", ".");
+            }
+        }
+        Some(directory)
     } else {
         // Create/Clone already own a private retained capability. Continue on
         // that object if the pathname moves, and verify it before registration.
