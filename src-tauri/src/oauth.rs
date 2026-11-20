@@ -241,6 +241,11 @@ struct TokenResponse {
 }
 const RECONNECT_EXPIRED: &str = "GitHub sign-in expired. Reconnect this account.";
 const RECOVERY_PENDING: &str = "Reponiq saved the new GitHub sign-in but could not finish updating the credential store. Unlock it and retry.";
+
+fn reconnect_expired() -> String {
+    log::info!(target: "reponiq::oauth", "{RECONNECT_EXPIRED}");
+    RECONNECT_EXPIRED.into()
+}
 #[derive(Serialize, Deserialize, Clone)]
 pub(super) struct Credential {
     version: u8,
@@ -352,7 +357,7 @@ fn needs_reconnect(error: Option<&str>) -> bool {
 
 fn received_rotation(response: TokenResponse, client_id: String) -> Result<Credential, String> {
     match response.error.as_deref() {
-        error if needs_reconnect(error) => Err(RECONNECT_EXPIRED.into()),
+        error if needs_reconnect(error) => Err(reconnect_expired()),
         Some(_) => {
             Err("Could not refresh GitHub sign-in. Try again or reconnect this account.".into())
         }
@@ -378,7 +383,7 @@ async fn rotation_response(
         }
         let payload = read_json_body::<ProviderError>(response).await?;
         if needs_reconnect(payload.error.as_deref()) {
-            return Err(RECONNECT_EXPIRED.into());
+            return Err(reconnect_expired());
         }
     }
     Err("Could not refresh GitHub sign-in. Check your connection and try again.".into())
@@ -592,6 +597,7 @@ pub(super) async fn account_token(
                 credential.repair_mirror(raw.as_deref(), |value| write_secret(&mirror, Some(value)))
             })
             .await?;
+            log::info!(target: "reponiq::oauth", "Recovered the pending GitHub credential update");
             return Ok(token);
         }
         return Ok(credential.access_token);
@@ -604,7 +610,7 @@ pub(super) async fn account_token(
                 .refresh_expires_at
                 .is_some_and(|expiry| expiry <= super::now())
         })
-        .ok_or(RECONNECT_EXPIRED)?;
+        .ok_or_else(reconnect_expired)?;
     let response = gh_client()?
         .post(TOKEN_URL)
         .header("Accept", "application/json")
