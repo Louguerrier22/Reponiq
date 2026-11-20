@@ -92,6 +92,12 @@ impl GithubCredentials {
         for name in [
             "GIT_TRACE",
             "GIT_TRACE_PACKET",
+            "GIT_TRACE_PACKFILE",
+            "GIT_TRACE_PERFORMANCE",
+            "GIT_TRACE_REFS",
+            "GIT_TRACE_SETUP",
+            "GIT_TRACE_SHALLOW",
+            "GIT_TRACE_FSMONITOR",
             "GIT_TRACE_CURL",
             "GIT_TRACE2",
             "GIT_TRACE2_EVENT",
