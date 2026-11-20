@@ -445,15 +445,15 @@ mod tests {
     fn real_git_failures_reach_the_runtime_journal_with_stderr() {
         init();
         let directory = tempfile::tempdir().unwrap();
+        crate::git(directory.path(), &["init"]).unwrap();
         assert!(crate::git(directory.path(), &["reponiq-fixture-missing-command"]).is_err());
-        let journal = JOURNAL.lock().unwrap();
-        assert!(journal
-            .entries
-            .iter()
-            .any(|entry| entry.level == Level::Error
+        let logged = JOURNAL.lock().unwrap().entries.iter().any(|entry| {
+            entry.level == Level::Error
                 && entry.source.contains("git")
                 && entry.message.contains("reponiq-fixture-missing-command")
-                && entry.message.contains("not a git command")));
+                && entry.message.contains("not a git command")
+        });
+        assert!(logged);
     }
 
     #[test]

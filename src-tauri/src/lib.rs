@@ -22,6 +22,8 @@ mod launch_settings;
 mod oauth;
 mod pulls;
 mod repo_actions;
+#[cfg(target_os = "linux")]
+mod repository_identity;
 mod startup;
 mod storage;
 mod updater;
@@ -135,6 +137,8 @@ fn initialize(database: &Path) -> Result<Connection, String> {
        CREATE TABLE IF NOT EXISTS accounts(id INTEGER PRIMARY KEY, login TEXT NOT NULL, api_host TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(login,api_host));
        CREATE INDEX IF NOT EXISTS idx_activity_date ON activity(occurred_at DESC);").map_err(err)?;
     workflow::initialize(&db)?;
+    #[cfg(target_os = "linux")]
+    repository_identity::initialize(&db)?;
     {
         let mut stmt = db
             .prepare("SELECT id,remote_url FROM repos WHERE remote_url IS NOT NULL")
@@ -257,6 +261,17 @@ fn git_capture_impl(
     }
     log::debug!(target: "reponiq::git", "{operation} started in {}", path.display());
     let mut command = Command::new(git_binary()?);
+    #[cfg(target_os = "linux")]
+    for selector in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ] {
+        command.env_remove(selector);
+    }
     // The supervisor owns short-lived commands. A new FSMonitor daemon would
     // be stopped on exit, so these commands use Git's regular status scan.
     command.args(["-c", "core.fsmonitor=false"]);
@@ -270,6 +285,27 @@ fn git_capture_impl(
             .env("SSH_ASKPASS", "")
             .env("SSH_ASKPASS_REQUIRE", "never");
     }
+    #[cfg(target_os = "linux")]
+    let checked_directory = if directory.is_none() {
+        let can_discover =
+            matches!(operation, "init" | "clone") || args == ["rev-parse", "--show-toplevel"];
+        let (directory, git_dir) = repository_identity::open_for_git(path, can_discover)?;
+        if let Some(git_dir) = git_dir {
+            // Bind commands to this checkout even if its own metadata becomes
+            // invalid. Ordinary Git discovery could select an enclosing repo.
+            command.env("GIT_DIR", git_dir);
+            if git_dir == ".git" {
+                command.env("GIT_WORK_TREE", ".");
+            }
+        }
+        Some(directory)
+    } else {
+        // Create/Clone already own a private retained capability. Continue on
+        // that object if the pathname moves, and verify it before registration.
+        None
+    };
+    #[cfg(target_os = "linux")]
+    let directory = directory.or(checked_directory.as_ref());
     if let Some(directory) = directory {
         #[cfg(target_os = "linux")]
         {
@@ -498,6 +534,12 @@ fn repo_path(db: &Connection, id: i64) -> Result<PathBuf, String> {
         .map_err(err)?;
     Ok(PathBuf::from(path))
 }
+fn checked_repo_path(db: &Connection, id: i64) -> Result<PathBuf, String> {
+    let path = repo_path(db, id)?;
+    #[cfg(target_os = "linux")]
+    repository_identity::check(db, id, &path, false)?;
+    Ok(path)
+}
 fn status(path: &Path) -> Result<(String, usize, i64, i64), String> {
     let (branch, dirty, ahead, behind, _) = status_with_head(path)?;
     Ok((branch, dirty, ahead, behind))
@@ -635,13 +677,26 @@ struct RepoSummary {
     missing: bool,
 }
 fn repo_summary_impl(id: i64, state: &State) -> Result<RepoSummary, String> {
-    let (path, registration) = {
+    let (path, registration, identity) = {
         let db = state.database.lock().map_err(err)?;
-        (repo_path(&db, id)?, workflow::registration(&db, id)?)
+        (
+            repo_path(&db, id)?,
+            workflow::registration(&db, id)?,
+            checked_repo_path(&db, id),
+        )
     };
-    let missing = matches!(path.try_exists(), Ok(false));
-    let result = if missing {
+    let gone = matches!(path.try_exists(), Ok(false));
+    #[cfg(target_os = "linux")]
+    let missing = gone
+        || identity
+            .as_ref()
+            .is_err_and(|error| repository_identity::requires_locate(error));
+    #[cfg(not(target_os = "linux"))]
+    let missing = gone;
+    let result = if gone {
         Err("The repository folder is missing.".into())
+    } else if let Err(error) = identity {
+        Err(error)
     } else {
         git(
             &path,
@@ -723,15 +778,18 @@ fn add_repo_impl(path: String, state: &State) -> Result<Repo, String> {
     let remote = git(&path, &["remote", "get-url", "origin"])
         .ok()
         .map(|url| safe_remote(&url));
-    let db = state.database.lock().map_err(err)?;
-    db.execute(
+    let mut db = state.database.lock().map_err(err)?;
+    let tx = db.transaction().map_err(err)?;
+    tx.execute(
         "INSERT OR IGNORE INTO repos(path,name,remote_url) VALUES(?1,?2,?3)",
         params![canonical, name, remote],
     )
     .map_err(err)?;
-    let row=db.query_row("SELECT id,name,remote_url,pinned,collection,tags,ci_status,ci_conclusion FROM repos WHERE path=?1",[&canonical],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,i64>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,String>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,Option<String>>(7)?))).map_err(err)?;
+    let row=tx.query_row("SELECT id,name,remote_url,pinned,collection,tags,ci_status,ci_conclusion FROM repos WHERE path=?1",[&canonical],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,i64>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,String>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,Option<String>>(7)?))).map_err(err)?;
+    #[cfg(target_os = "linux")]
+    repository_identity::check(&tx, row.0, &path, false)?;
     record(
-        &db,
+        &tx,
         Some(row.0),
         &format!("repo-added:{}", row.0),
         "repo",
@@ -739,7 +797,8 @@ fn add_repo_impl(path: String, state: &State) -> Result<Repo, String> {
         Some(&name),
         now(),
     )?;
-    let registration = workflow::registration(&db, row.0)?;
+    let registration = workflow::registration(&tx, row.0)?;
+    tx.commit().map_err(err)?;
     drop(db);
     let mut repo = build_repo(
         row.0, canonical, row.1, row.2, row.3, row.4, row.5, row.6, row.7,
@@ -796,7 +855,7 @@ fn refresh_repos_impl(state: &State) -> Result<Vec<Repo>, String> {
     list_repos_impl(state)
 }
 fn repo_details_impl(id: i64, state: &State) -> Result<Details, String> {
-    let path = repo_path(&*state.database.lock().map_err(err)?, id)?;
+    let path = checked_repo_path(&*state.database.lock().map_err(err)?, id)?;
     let raw = git(&path, &["log", "-35", "--format=%H%x1f%s%x1f%an%x1f%ct"]).unwrap_or_default();
     let commits = raw
         .lines()
@@ -918,7 +977,7 @@ fn git_action_impl(
     state: &State,
 ) -> Result<String, String> {
     let _mutation = gitflow::MUTATIONS.lock().map_err(err)?;
-    let path = repo_path(&*state.database.lock().map_err(err)?, id)?;
+    let path = checked_repo_path(&*state.database.lock().map_err(err)?, id)?;
     if matches!(path.try_exists(), Ok(false)) {
         return Err("The repository folder is missing. Use Locate folder.".into());
     }

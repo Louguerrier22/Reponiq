@@ -1,4 +1,6 @@
-use super::{background, background_job, err, git, git_startup_fetch, gitflow, repo_path, State};
+use super::{
+    background, background_job, checked_repo_path, err, git, git_startup_fetch, gitflow, State,
+};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 mod autostart;
@@ -96,7 +98,7 @@ pub async fn launch_fetch(
             if !settings.enabled || !super::workflow::fetch_mode(&db,id)?.resolve(settings.scope==FetchScope::All || pinned) {
                 return Ok(false);
             }
-            repo_path(&db, id)?
+            checked_repo_path(&db, id)?
         };
         if let Some(batch)=batch {
             use std::{collections::{BTreeMap,HashSet},path::PathBuf,sync::{LazyLock,Mutex}};

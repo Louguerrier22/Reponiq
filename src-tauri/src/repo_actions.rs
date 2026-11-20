@@ -97,7 +97,7 @@ pub async fn repo_context(
     state: tauri::State<'_, State>,
 ) -> Result<RepoContext, String> {
     background(state, move |s| {
-        let path = target.verify(&*s.database.lock().map_err(err)?)?;
+        let path = target.verified_path(&*s.database.lock().map_err(err)?)?;
         Ok(context(&path))
     })
     .await
@@ -193,7 +193,7 @@ pub async fn set_git_identity(
     }
     background(state, move |s| {
         let _mutation = gitflow::MUTATIONS.lock().map_err(err)?;
-        let path = target.verify(&*s.database.lock().map_err(err)?)?;
+        let path = target.verified_path(&*s.database.lock().map_err(err)?)?;
         let repository = gitflow::repository_lock(&path)?;
         let _guard = repository
             .try_lock()
@@ -313,7 +313,7 @@ pub async fn open_repo_location(
     background(state, move |s| {
         let (path,editor)={
             let db=s.database.lock().map_err(err)?;
-            let path=target.verify(&db)?;
+            let path=target.verified_path(&db)?;
             let editor=if action=="editor" {
                 use rusqlite::OptionalExtension;
                 let chosen=db.query_row("SELECT editor FROM repo_workflow WHERE repo_id=?1", [target.id], |row|row.get::<_,Option<String>>(0)).optional().map_err(err)?.flatten();
@@ -458,13 +458,22 @@ fn relink(
             "Confirm the repository identity or add the folder as a new repository.".into(),
         );
     }
-    let db = state.database.lock().map_err(err)?;
-    target.verify(&db)?;
-    db.execute(
+    let mut db = state.database.lock().map_err(err)?;
+    let tx = db.transaction().map_err(err)?;
+    target.verify(&tx)?;
+    tx.execute(
         "UPDATE repos SET path=?1,remote_url=?2 WHERE id=?3 AND path=?4",
         rusqlite::params![result.path, result.remote, target.id, target.path],
     )
     .map_err(err)?;
+    #[cfg(target_os = "linux")]
+    {
+        super::repository_identity::check(&tx, target.id, Path::new(&result.path), true)?;
+        if result.path == target.path {
+            tx.execute("UPDATE workflow_registrations SET token=lower(hex(randomblob(16))) WHERE repo_id=?1", [target.id]).map_err(err)?;
+        }
+    }
+    tx.commit().map_err(err)?;
     Ok(result)
 }
 
@@ -652,7 +661,7 @@ pub async fn undo_local_commit(
         let (path, known) = {
             let db = s.database.lock().map_err(err)?;
             (
-                target.verify(&db)?,
+                target.verified_path(&db)?,
                 workflow::published_tips(&db, target.id)?,
             )
         };

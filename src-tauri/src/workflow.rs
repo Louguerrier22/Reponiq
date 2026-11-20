@@ -141,6 +141,13 @@ impl Target {
         }
         Ok(path)
     }
+
+    pub(super) fn verified_path(&self, db: &Connection) -> Result<std::path::PathBuf, String> {
+        let path = self.verify(db)?;
+        #[cfg(target_os = "linux")]
+        super::repository_identity::check(db, self.id, &path, false)?;
+        Ok(path)
+    }
 }
 
 pub(super) fn registration(db: &Connection, id: i64) -> Result<Option<String>, String> {
@@ -366,7 +373,7 @@ pub async fn visit_repo(
         branch_name(branch)?;
     }
     background(state, move |s| {
-        let path=target.verify(&*s.database.lock().map_err(err)?)?;
+        let path=target.verified_path(&*s.database.lock().map_err(err)?)?;
         let main=super::gitflow::common_directory(&path).ok().and_then(|common|{
             let folder=common.parent()?;
             (folder!=path&&folder.join(".git")==common&&folder.is_dir()).then(||folder.to_string_lossy().into_owned())
