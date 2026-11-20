@@ -12,7 +12,7 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 node scripts/release.mjs verify
 ```
 
-`npm run build` checks Svelte/TypeScript and creates the frontend bundle. The Linux startup smoke test now requires a frontend-mounted event after rendering-frame callbacks, in addition to the window and database. Set `REPONIQ_SMOKE_BINARY` to validate the actual packaged AppImage, and test with an existing cache/profile as well as a fresh one. Native installers require `npm run tauri build -- --bundles nsis` on Windows or `npm run tauri build -- --bundles deb,rpm,appimage` on Linux. Rebuild after any source or icon change. `assets/reponiq.svg` owns the original app mark; `npm run tauri icon -- assets/reponiq.svg` regenerates platform artwork.
+`npm run build` checks React/TypeScript and creates the frontend bundle. The Linux startup smoke test now requires a frontend-mounted event after rendering-frame callbacks, in addition to the window and database. Set `REPONIQ_SMOKE_BINARY` to validate the actual packaged AppImage, and test with an existing cache/profile as well as a fresh one. Native installers require `npm run tauri build -- --bundles nsis` on Windows or `npm run tauri build -- --bundles deb,rpm,appimage` on Linux. Rebuild after any source or icon change. `assets/reponiq.svg` owns the original app mark; `npm run tauri icon -- assets/reponiq.svg` regenerates platform artwork.
 
 ## Release
 
@@ -24,7 +24,9 @@ Version 1.1 supports signed updates for Windows NSIS and Linux AppImage. See [th
 
 ## Ownership
 
-`src/App.svelte` owns interface state and orchestration; `src/lib/Modal.svelte` owns native dialog focus behavior; `src/lib/api.ts` owns typed IPC and filtering. `src-tauri/src/lib.rs` owns bounded worker commands, Git, SQLite, GitHub, and the tray. `src-tauri/src/storage.rs` owns the rename-compatible storage selection. Keep compatible database contracts and use isolated fixtures for tests.
+`src/react/App.tsx` owns workspace orchestration, `src/react/lib/Modal.tsx` owns shared dialog focus behavior, and `src/lib/api.ts` owns typed IPC and filtering. `src-tauri/src/lib.rs` owns bounded worker commands, Git, SQLite, GitHub, and the tray. `src-tauri/src/storage.rs` owns the rename-compatible storage selection. Keep compatible database contracts and use isolated fixtures for tests.
+
+`components.json` configures the official shadcn CLI. Use reviewed registry items when developing UI components. The theme browser pages through a curated catalog from shadcn/ui and tweakcn. It downloads only the requested theme and previews its validated light and dark color tokens and radius. Public links to supported theme JSON files can also be imported. Applying a theme stores it through the existing appearance preference, including offline use after restart. Existing appearance preferences remain readable. Component and block installation is a source-code change made during development.
 
 ## Dependency notices
 

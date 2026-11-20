@@ -2,11 +2,11 @@
 
 ## Design intent
 
-Reponiq is **local-first**, native, and intentionally small. Tauri hosts the Svelte UI, Rust performs I/O, SQLite stores local metadata, OS keyrings hold GitHub credentials, and installed `git` handles repository operations.
+Reponiq is **local-first**. Tauri hosts the React UI, Rust performs I/O, SQLite stores local metadata, OS keyrings hold GitHub credentials, and installed `git` handles repository operations.
 
 ```mermaid
 flowchart TD
-    UI[Svelte 5 UI] --> API[Typed Tauri invoke bridge]
+    UI[React UI] --> API[Typed Tauri invoke bridge]
     API --> R[Rust command handlers]
     R --> DB[(SQLite local store)]
     R --> G[Installed Git CLI]
@@ -17,9 +17,13 @@ flowchart TD
 
 ## System boundaries
 
-**Frontend** (`src/App.svelte`, `src/lib/api.ts`): card shelf, collection/search filtering, focused workbench, changed-file selector, bounded read-only diff, pinned items, Git actions, events and settings. No secrets should be persisted in frontend state beyond the active token-entry step.
+**Frontend** (`src/react/App.tsx`, `src/lib/api.ts`): card shelf, collection/search filtering, focused workbench, changed-file selector, bounded read-only diff, pinned items, Git actions, events and settings. React renders views and MobX tracks state for the existing asynchronous workflows. No secrets should be persisted in frontend state beyond the active token-entry step.
 
-Shared shadcn-svelte components live in `src/lib/ui`. The owned adaptations use Reponiq's stylesheet for the graphite surfaces, lavender focus and selection, and compact layout. Bits UI handles keyboard and focus behavior for dialogs, checkboxes, tabs and disclosures. Inputs and selects keep browser-native text entry and option picking. Git diffs, repository results and the walkthrough layout are composed in the app with these controls.
+Official shadcn/ui components live in `src/react/shadcn`. Reponiq's adapters retain its graphite and lavender styling and connect these components to application state. Radix handles keyboard and focus behavior for dialogs, tabs, and the sidebar drawer. The desktop updater stays mounted independently of the sidebar.
+
+Appearance uses scoped theme variables shared by the workspace, dialogs, and the preview. Reponiq is the only bundled choice in the theme browser. Existing Nova and Lyra preferences still render. Downloaded themes from shadcn/ui, tweakcn, or a supported JSON link supply light and dark colors and radius. Applying the preview saves those tokens under the additive `appearance-registry-v1` preference. Sonner displays successful actions while actionable errors stay with their workflow. The Workflows tab reads the activity log for the current repository.
+
+First-run setup advances through appearance, workspace, startup, and review. SQLite keeps the checkpoint in `onboarding-step-v1` and appearance in `appearance-v1`. Both are additive to the 1.1.0 preferences contract. Completion writes the legacy `workspace-setup-complete` key in the same transaction as the final checkpoint. A legacy completion takes precedence when an older build completed setup during a rollback. The existing walkthrough key remains independent.
 
 **Rust backend** (`src-tauri/src/lib.rs`): Tauri command handlers, local filesystem and Git calls, SQLite persistence, account validation, manual workflow sync and tray setup. `gitflow.rs` owns Git preflight, history, conflict and revert mechanics; `oauth.rs` owns device sign-in/refresh; `pulls.rs` owns bounded GitHub PR APIs; `catalog.rs` owns repository catalogs/create/clone; `conflict_file.rs` owns directory-bound text replacement; `create_directory.rs` owns atomic/private destination creation; `workspace.rs` owns fixed-key preferences and bounded local-client discovery/import. `git` is executed through argument arrays rather than a shell.
 
