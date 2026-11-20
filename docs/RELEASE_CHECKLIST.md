@@ -8,7 +8,7 @@ Reponiq 1.0.1 is the follow-up to the consolidated v1 baseline, identified by ta
 
 | Surface | Observed checks |
 | --- | --- |
-| Frontend | Frontend test suite and React/TypeScript production build with zero errors and warnings. |
+| Frontend | 18 tests and a Svelte/TypeScript production build with zero errors and warnings. |
 | Windows native core | 37 local Windows tests covering real local Git operations, separate-file commits, merge/revert conflicts, deleted upstream guards, literal paths, catalog init/clone, retained directory authority, credential identity and bounded provider transport. |
 | Native interface | Real disposable-repository creation, per-file staging and commits, history/diff selection, browser device-code start/open/cancel, native folder selection, persisted walkthrough skip and replay, first-run setup, saved folder reload and reviewed discovery/import of four disposable repositories. |
 | Compact layout | Create/Clone/PR/conflict screens checked at 760px, without page-level horizontal overflow. Checked controls use visible lavender fill and a dark check. |
