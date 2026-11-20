@@ -27,7 +27,9 @@ export type ConflictDetails = {path:string;ours:string|null;theirs:string|null;c
 export type Pull = {number:number;title:string;body:string|null;state:string;draft:boolean;merged:boolean|null;mergeable:boolean|null;mergeable_state:string|null;user:{login:string};head:{label:string;sha:string;ref:string};base:{label:string;sha:string;ref:string}};
 export type Review = {id:number;user:{login:string};state:string;body:string|null;commit_id:string|null};
 export type PullFile = {filename:string;status:string;additions:number;deletions:number;patch:string|null;previous_filename:string|null};
-export type PullDetails = {pull:Pull;reviews:Review[];reviews_complete:boolean;checks:{runs:{name:string;status:string;conclusion:string|null;web_url?:string|null}[];legacy_state:string;complete:boolean;ready:boolean};merge_methods:string[]};
+export type PullDetails = {repository:string;repository_id:string;pull:Pull;reviews:Review[];reviews_complete:boolean;checks:{runs:{name:string;status:string;conclusion:string|null;web_url?:string|null}[];legacy_state:string;complete:boolean;ready:boolean};merge_methods:string[]};
+export type PullMergeScope = {target:Target;accountId:number;accountLogin:string};
+export type ReviewedPull = PullMergeScope & {repository:string;repositoryId:string;number:number;head:string;base:string};
 export type PullCommit = {sha:string;commit:{message:string}};
 export type PullContext = {full_name:string;default_branch:string;branches:string[];merge_methods:string[]};
 export type PullComparison = {base_commit:{sha:string};ahead_by:number;behind_by:number;files:{filename:string;status:string}[]};
@@ -90,13 +92,13 @@ export const api = {
   conflict: (id:number,file:string) => invoke<ConflictDetails>('conflict_details',{id,file}),
   pullContext: (id:number,accountId:number) => invoke<PullContext>('pull_context',{id,accountId}),
   pulls: (id:number,accountId:number,page:number) => invoke<Page<Pull>>('list_pull_requests',{id,accountId,page}),
-  pullDetails: (id:number,accountId:number,number:number) => invoke<PullDetails>('pull_request_details',{id,accountId,number}),
-  pullFiles: (id:number,accountId:number,number:number,page:number,commit:string|null) => invoke<Page<PullFile>>('pull_request_files',{id,accountId,number,page,commit}),
-  pullCommits: (id:number,accountId:number,number:number) => invoke<Page<PullCommit>>('pull_request_commits',{id,accountId,number}),
+  pullDetails: (scope:PullMergeScope,number:number) => invoke<PullDetails>('pull_request_details',{...scope,number}),
+  pullFiles: (review:ReviewedPull,page:number,commit:string|null) => invoke<Page<PullFile>>('pull_request_files',{review,page,commit}),
+  pullCommits: (review:ReviewedPull) => invoke<Page<PullCommit>>('pull_request_commits',{review}),
   createPull: (id:number,accountId:number,input:{title:string;body:string;base:string;head:string;expected_head:string;expected_base:string;draft:boolean}) => invoke<{pull:Pull;matches_comparison:boolean}>('create_pull_request',{id,accountId,input}),
   comparePull: (id:number,accountId:number,base:string,head:string,expectedHead:string) => invoke<PullComparison>('compare_pull_branches',{id,accountId,base,head,expectedHead}),
   reviewPull: (id:number,accountId:number,number:number,head:string,event:string,body:string) => invoke<Review>('review_pull_request',{id,accountId,number,head,event,body}),
-  mergePull: (id:number,accountId:number,number:number,head:string,method:string) => invoke<string>('merge_pull_request',{id,accountId,number,head,method}),
+  mergePull: (review:ReviewedPull,method:string) => invoke<string>('merge_pull_request',{review,method}),
   git: async (id: number, action: string, args: string[] = [], expected: GitExpectation|null = null) => {
     try { return await invoke<string>('git_action', {id, action, args, expected}); }
     catch (error) {

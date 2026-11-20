@@ -73,6 +73,7 @@ pub struct Checks {
 }
 #[derive(Deserialize)]
 struct Repository {
+    id: u64,
     full_name: String,
     default_branch: String,
     allow_merge_commit: Option<bool>,
@@ -93,6 +94,8 @@ pub struct Page<T> {
 }
 #[derive(Serialize)]
 pub struct PullDetails {
+    repository: String,
+    repository_id: String,
     pull: Pull,
     reviews: Vec<Review>,
     reviews_complete: bool,
@@ -296,6 +299,8 @@ impl Api {
             self.get::<Repository>("")
         )?;
         Ok(PullDetails {
+            repository: self.full.clone(),
+            repository_id: repo.id.to_string(),
             pull,
             reviews: reviews.0,
             reviews_complete: !reviews.1,
@@ -303,9 +308,21 @@ impl Api {
             merge_methods: methods(&repo),
         })
     }
-    async fn merge(&self, number: u64, head: &str, method: &str) -> Result<String, String> {
+    async fn merge(
+        &self,
+        number: u64,
+        head: &str,
+        base: &str,
+        method: &str,
+        repository_id: &str,
+    ) -> Result<String, String> {
         let details = self.details(number).await?;
+        verify_reviewed_repository(&details.repository_id, repository_id)?;
+        verify_reviewed_base(&details.pull, base)?;
         merge_allowed(&details, head, method)?;
+        let current = self.pull(number).await?;
+        verify_reviewed_base(&current, base)?;
+        current_pull(&current, head)?;
         #[derive(Deserialize)]
         struct ResultBody {
             merged: bool,
@@ -353,22 +370,56 @@ fn methods(repo: &Repository) -> Vec<String> {
     .collect()
 }
 async fn api(id: i64, account_id: i64, state: tauri::State<'_, State>) -> Result<Api, String> {
+    scoped_api(id, account_id, state, None).await
+}
+
+struct PullScope {
+    target: super::workflow::Target,
+    account_login: String,
+    repository: Option<String>,
+}
+
+async fn scoped_api(
+    id: i64,
+    account_id: i64,
+    state: tauri::State<'_, State>,
+    expected: Option<PullScope>,
+) -> Result<Api, String> {
     let full = background(state.clone(), move |s| {
-        let path = repo_path(&*s.database.lock().map_err(err)?, id)?;
-        let host: String = s
-            .database
-            .lock()
-            .map_err(err)?
-            .query_row(
-                "SELECT api_host FROM accounts WHERE id=?1",
-                [account_id],
-                |r| r.get(0),
-            )
-            .map_err(|_| "Select a connected GitHub account.".to_string())?;
+        let (path, host) = {
+            let db = s.database.lock().map_err(err)?;
+            let path = if let Some(scope) = &expected {
+                scope.target.verify(&db)?
+            } else {
+                repo_path(&db, id)?
+            };
+            let (host, login): (String, String) = db
+                .query_row(
+                    "SELECT api_host,login FROM accounts WHERE id=?1",
+                    [account_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .map_err(|_| "Select a connected GitHub account.".to_string())?;
+            if let Some(scope) = &expected {
+                if !login.eq_ignore_ascii_case(&scope.account_login) {
+                    return Err("The GitHub account changed. Reopen the pull request.".into());
+                }
+            }
+            (path, host)
+        };
         super::validate_host(&host)?;
         let remote = git(&path, &["remote", "get-url", "origin"])?;
-        full_name(&remote)
-            .ok_or("In-app pull requests currently support GitHub.com origin remotes.".into())
+        let full = full_name(&remote)
+            .ok_or("In-app pull requests currently support GitHub.com origin remotes.")?;
+        if let Some(repository) = expected
+            .as_ref()
+            .and_then(|scope| scope.repository.as_deref())
+        {
+            if !full.eq_ignore_ascii_case(repository) {
+                return Err("The GitHub origin changed. Reopen the pull request.".into());
+            }
+        }
+        Ok(full)
     })
     .await?;
     let token = oauth::account_token(account_id, state).await?;
@@ -492,29 +543,36 @@ pub async fn open_pull_check(
 }
 #[tauri::command]
 pub async fn pull_request_details(
-    id: i64,
+    target: super::workflow::Target,
     account_id: i64,
+    account_login: String,
     number: u64,
     state: tauri::State<'_, State>,
 ) -> Result<PullDetails, String> {
     let _guard = oauth::ACCOUNT_LOCK.lock().await;
-    api(id, account_id, state).await?.details(number).await
+    let scope = PullScope {
+        target,
+        account_login,
+        repository: None,
+    };
+    scoped_api(scope.target.id, account_id, state, Some(scope))
+        .await?
+        .details(number)
+        .await
 }
 #[tauri::command]
 pub async fn pull_request_files(
-    id: i64,
-    account_id: i64,
-    number: u64,
+    review: ReviewedPull,
     page: u32,
     commit: Option<String>,
     state: tauri::State<'_, State>,
 ) -> Result<Page<PullFile>, String> {
-    number_valid(number)?;
+    let number = review.number;
     if !(1..=30).contains(&page) {
         return Err("File paging limit reached. Use GitHub for the remaining files.".into());
     }
     let _guard = oauth::ACCOUNT_LOCK.lock().await;
-    let api = api(id, account_id, state).await?;
+    let api = review.api(state).await?;
     let (items, has_more) = if let Some(sha) = commit {
         hash_valid(&sha)?;
         // A commit must belong to this PR before it can be inspected through this surface.
@@ -548,14 +606,12 @@ pub async fn pull_request_files(
 }
 #[tauri::command]
 pub async fn pull_request_commits(
-    id: i64,
-    account_id: i64,
-    number: u64,
+    review: ReviewedPull,
     state: tauri::State<'_, State>,
 ) -> Result<Page<PullCommit>, String> {
-    number_valid(number)?;
+    let number = review.number;
     let _guard = oauth::ACCOUNT_LOCK.lock().await;
-    let api = api(id, account_id, state).await?;
+    let api = review.api(state).await?;
     let (items, has_more) = api
         .request(
             reqwest::Method::GET,
@@ -736,19 +792,76 @@ fn merge_allowed(details: &PullDetails, head: &str, method: &str) -> Result<(), 
     }
     Ok(())
 }
-#[tauri::command]
-pub async fn merge_pull_request(
-    id: i64,
+fn verify_reviewed_repository(actual: &str, expected: &str) -> Result<(), String> {
+    if actual == "0" || actual != expected {
+        return Err("The GitHub repository changed. Reopen the pull request.".into());
+    }
+    Ok(())
+}
+
+fn verify_reviewed_base(pull: &Pull, base: &str) -> Result<(), String> {
+    if pull.base.name != base {
+        return Err("The destination branch changed. Reopen the pull request.".into());
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewedPull {
+    target: super::workflow::Target,
     account_id: i64,
+    account_login: String,
+    repository: String,
+    repository_id: String,
     number: u64,
     head: String,
+    base: String,
+}
+
+impl ReviewedPull {
+    async fn scoped_api(&self, state: tauri::State<'_, State>) -> Result<Api, String> {
+        number_valid(self.number)?;
+        let scope = PullScope {
+            target: self.target.clone(),
+            account_login: self.account_login.clone(),
+            repository: Some(self.repository.clone()),
+        };
+        scoped_api(self.target.id, self.account_id, state, Some(scope)).await
+    }
+
+    async fn api(&self, state: tauri::State<'_, State>) -> Result<Api, String> {
+        let api = self.scoped_api(state).await?;
+        let (repo, pull) = tokio::try_join!(api.get::<Repository>(""), api.pull(self.number))?;
+        verify_reviewed_repository(&repo.id.to_string(), &self.repository_id)?;
+        verify_reviewed_base(&pull, &self.base)?;
+        if pull.head.sha != self.head {
+            return Err("New commits were added. Reopen the pull request.".into());
+        }
+        Ok(api)
+    }
+}
+
+#[tauri::command]
+pub async fn merge_pull_request(
+    review: ReviewedPull,
     method: String,
     state: tauri::State<'_, State>,
 ) -> Result<String, String> {
     let _update = super::updater::workspace_job()?;
     let _guard = oauth::ACCOUNT_LOCK.lock().await;
-    let api = api(id, account_id, state).await?;
-    api.merge(number, &head, &method).await
+    if review.target.registration.is_none() {
+        return Err("Refresh the repository before merging.".into());
+    }
+    let api = review.scoped_api(state).await?;
+    api.merge(
+        review.number,
+        &review.head,
+        &review.base,
+        &method,
+        &review.repository_id,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -902,7 +1015,7 @@ mod tests {
         } else if route.contains("/pulls/1 ") {
             serde_json::to_value(details().pull).unwrap()
         } else {
-            json!({"full_name":"example/repo","default_branch":"main","allow_merge_commit":true,"allow_squash_merge":false,"allow_rebase_merge":false})
+            json!({"id":42,"full_name":"example/repo","default_branch":"main","allow_merge_commit":true,"allow_squash_merge":false,"allow_rebase_merge":false})
         };
         (200, serde_json::to_vec(&value).unwrap(), String::new())
     }
@@ -913,10 +1026,54 @@ mod tests {
         let counter = puts.clone();
         let server = server(move |h, b| reply(h, b, &counter));
         let error = client(&server)
-            .merge(1, &"b".repeat(40), "merge")
+            .merge(1, &"b".repeat(40), "main", "merge", "42")
             .await
             .unwrap_err();
         assert!(error.contains("New commits"), "{error}");
+        assert_eq!(puts.load(Ordering::Acquire), 0);
+    }
+    #[tokio::test]
+    async fn merge_requires_the_reviewed_provider_repository() {
+        let _fixture = TRANSPORT_FIXTURE.lock().await;
+        let puts = Arc::new(AtomicUsize::new(0));
+        let counter = puts.clone();
+        let server = server(move |h, b| reply(h, b, &counter));
+        let api = client(&server);
+        let reviewed = api.details(1).await.unwrap();
+        assert_eq!(reviewed.repository, "example/repo");
+        assert_eq!(reviewed.repository_id, "42");
+        let error = api
+            .merge(1, &reviewed.pull.head.sha, "main", "merge", "43")
+            .await
+            .unwrap_err();
+        assert!(error.contains("repository changed"), "{error}");
+        assert_eq!(puts.load(Ordering::Acquire), 0);
+    }
+    #[tokio::test]
+    async fn merge_rejects_a_retargeted_pull_with_the_same_head() {
+        let _fixture = TRANSPORT_FIXTURE.lock().await;
+        let puts = Arc::new(AtomicUsize::new(0));
+        let pulls = AtomicUsize::new(0);
+        let counter = puts.clone();
+        let server = server(move |headers, body| {
+            if headers
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .contains("/pulls/1 ")
+                && pulls.fetch_add(1, Ordering::AcqRel) > 0
+            {
+                let mut retargeted = details().pull;
+                retargeted.base.name = "release".into();
+                return (200, serde_json::to_vec(&retargeted).unwrap(), String::new());
+            }
+            reply(headers, body, &counter)
+        });
+        let error = client(&server)
+            .merge(1, &"a".repeat(40), "main", "merge", "42")
+            .await
+            .unwrap_err();
+        assert!(error.contains("destination branch changed"), "{error}");
         assert_eq!(puts.load(Ordering::Acquire), 0);
     }
     #[tokio::test]
@@ -926,7 +1083,7 @@ mod tests {
         let counter = puts.clone();
         let server = server(move |h, b| reply(h, b, &counter));
         assert!(client(&server)
-            .merge(1, &"a".repeat(40), "merge")
+            .merge(1, &"a".repeat(40), "main", "merge", "42")
             .await
             .unwrap()
             .contains("Merged pull request #1"));
@@ -1027,6 +1184,8 @@ mod tests {
     fn details() -> PullDetails {
         let sha = "a".repeat(40);
         PullDetails {
+            repository: "example/repo".into(),
+            repository_id: "42".into(),
             pull: Pull {
                 number: 1,
                 title: "Fixture".into(),
