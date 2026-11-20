@@ -2,31 +2,44 @@ use std::process::Command;
 
 /// A command-local helper: never write the account token into a remote URL,
 /// command-line argument, repository config, or the system credential helper.
+#[derive(serde::Deserialize, serde::Serialize)]
 pub(super) struct GithubCredentials {
     pub token: String,
     pub full_name: String,
 }
 
 pub(super) enum CloneAuthentication {
-    PublicGithub,
+    PublicGithub { full_name: String },
     Github(GithubCredentials),
 }
 
 impl CloneAuthentication {
     pub fn configure(&self, command: &mut Command) {
+        let full_name = match self {
+            Self::PublicGithub { full_name } => full_name,
+            Self::Github(credentials) => &credentials.full_name,
+        };
+        let remote = format!("https://github.com/{full_name}.git");
         // Public GitHub repositories must not depend on account permissions or
-        // stale system credentials/Authorization headers.
+        // stale system credentials. Reset repository settings at the same URL
+        // specificity as any saved overrides.
         command.args([
             "-c",
             "credential.helper=",
             "-c",
             "http.https://github.com/.extraHeader=",
             "-c",
+            &format!("http.{remote}.extraHeader="),
+            "-c",
+            &format!("http.{remote}.cookieFile="),
+            "-c",
+            &format!("http.{remote}.saveCookies=false"),
+            "-c",
             "core.askPass=",
         ]);
         command.env("GIT_ASKPASS", "").env("SSH_ASKPASS", "");
         if let Self::Github(credentials) = self {
-            credentials.configure(command);
+            credentials.configure(command, &remote);
         }
     }
 
@@ -52,8 +65,54 @@ const HELPER: &str = r#"!f() {
 }; f"#;
 
 impl GithubCredentials {
-    pub fn configure(&self, command: &mut Command) {
+    fn configure(&self, command: &mut Command, remote: &str) {
         super::diagnostics::remember_secret(&self.token);
+        // Authenticated transfers own their command-level configuration and
+        // never write diagnostics or TLS session keys through inherited knobs.
+        for name in [
+            "GIT_CONFIG",
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_CONFIG_SYSTEM",
+            "GIT_EXEC_PATH",
+            "GIT_TEMPLATE_DIR",
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_COMMON_DIR",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_CURL_VERBOSE",
+            "GIT_SSL_NO_VERIFY",
+            "SSLKEYLOGFILE",
+            "GIT_SSL_KEYLOGFILE",
+        ] {
+            command.env_remove(name);
+        }
+        for name in [
+            "GIT_TRACE",
+            "GIT_TRACE_PACKET",
+            "GIT_TRACE_PACKFILE",
+            "GIT_TRACE_PERFORMANCE",
+            "GIT_TRACE_REFS",
+            "GIT_TRACE_SETUP",
+            "GIT_TRACE_SHALLOW",
+            "GIT_TRACE_FSMONITOR",
+            "GIT_TRACE_CURL",
+            "GIT_TRACE2",
+            "GIT_TRACE2_EVENT",
+            "GIT_TRACE2_PERF",
+        ] {
+            command.env(name, "0");
+        }
+        // Only the known HTTPS transport can receive the credential. Keep a
+        // stricter inherited protocol allowlist in force.
+        let https_allowed = std::env::var_os("GIT_ALLOW_PROTOCOLS").is_none_or(|value| {
+            value
+                .to_string_lossy()
+                .split(':')
+                .any(|item| item == "https")
+        });
         command
             .args([
                 "-c",
@@ -64,7 +123,28 @@ impl GithubCredentials {
                 "credential.useHttpPath=true",
                 "-c",
                 "http.followRedirects=false",
+                "-c",
+                &format!("http.{remote}.followRedirects=false"),
+                "-c",
+                "http.https://github.com/.sslVerify=true",
+                "-c",
+                &format!("http.{remote}.sslVerify=true"),
+                "-c",
+                if cfg!(windows) {
+                    "core.hooksPath=NUL"
+                } else {
+                    "core.hooksPath=/dev/null"
+                },
             ])
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
+            .env(
+                "GIT_ALLOW_PROTOCOLS",
+                if https_allowed { "https" } else { "" },
+            )
             .env("REPONIQ_GIT_TOKEN", &self.token)
             .env("REPONIQ_GIT_PATH", format!("{}.git", self.full_name));
     }
@@ -92,8 +172,15 @@ mod tests {
         input: &str,
         authentication: CloneAuthentication,
     ) -> std::process::Output {
+        let fixture = tempfile::tempdir().unwrap();
+        let store = fixture.path().join("fixture-credential-store");
+        let saved = "https://saved-user:stale-secret@github.com/owner/project.git\n";
+        std::fs::write(&store, saved).unwrap();
         let mut command = Command::new(crate::git_binary().unwrap());
-        command.args(["-c", "credential.helper=!echo password=stale-secret"]);
+        command.current_dir(fixture.path()).args([
+            "-c",
+            "credential.helper=store --file=fixture-credential-store",
+        ]);
         authentication.configure(&mut command);
         let mut child = command
             .args(["credential", operation])
@@ -116,7 +203,9 @@ mod tests {
             .unwrap()
             .write_all(input.as_bytes())
             .unwrap();
-        child.wait_with_output().unwrap()
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(std::fs::read_to_string(store).unwrap(), saved);
+        output
     }
 
     #[test]
@@ -125,10 +214,14 @@ mod tests {
             "fill",
             "protocol=https\nhost=github.com\npath=owner/project.git\n\n",
         );
-        assert!(output.status.success());
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         assert!(String::from_utf8(output.stdout)
             .unwrap()
-            .contains("password=fixture-secret"));
+            .contains("username=x-access-token\npassword=fixture-secret"));
         for input in [
             "protocol=http\nhost=github.com\npath=owner/project.git\n\n",
             "protocol=https\nhost=other.example\npath=owner/project.git\n\n",
@@ -143,14 +236,21 @@ mod tests {
     #[test]
     fn credentials_are_not_in_arguments_or_persistent_configuration() {
         let mut command = Command::new("git");
-        GithubCredentials {
+        CloneAuthentication::Github(GithubCredentials {
             token: "fixture-secret".into(),
             full_name: "owner/project".into(),
-        }
+        })
         .configure(&mut command);
         assert!(!command
             .get_args()
             .any(|arg| arg.to_string_lossy().contains("fixture-secret")));
+        let options: std::collections::HashMap<_, _> = command.get_envs().collect();
+        assert_eq!(options[std::ffi::OsStr::new("GIT_EXEC_PATH")], None);
+        assert_eq!(options[std::ffi::OsStr::new("GIT_CONFIG_SYSTEM")], None);
+        assert_eq!(
+            options[std::ffi::OsStr::new("GIT_CONFIG_NOSYSTEM")],
+            Some(std::ffi::OsStr::new("1"))
+        );
         for operation in ["approve", "reject"] {
             let output = credential(operation, "protocol=https\nhost=github.com\npath=owner/project.git\nusername=x-access-token\npassword=fixture-secret\n\n");
             assert!(output.status.success());
@@ -160,34 +260,69 @@ mod tests {
 
     #[test]
     fn public_github_clone_clears_stale_authentication() {
+        let authentication = CloneAuthentication::PublicGithub {
+            full_name: "owner/project".into(),
+        };
+        assert_http_option(
+            &authentication,
+            "extraHeader",
+            "Authorization: stale-secret",
+            "",
+        );
+        assert_http_option(&authentication, "cookieFile", "fixture-cookies.txt", "");
+        assert_http_option(&authentication, "saveCookies", "true", "false");
         let mut command = Command::new(crate::git_binary().unwrap());
-        command.args([
-            "-c",
-            "credential.helper=!echo password=stale-secret",
-            "-c",
-            "http.https://github.com/.extraHeader=Authorization: stale-secret",
-        ]);
-        CloneAuthentication::PublicGithub.configure(&mut command);
-        let output = command
-            .args([
-                "config",
-                "--get-urlmatch",
-                "http.extraHeader",
-                "https://github.com/owner/project.git",
-            ])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        assert!(String::from_utf8(output.stdout).unwrap().trim().is_empty());
+        authentication.configure(&mut command);
         assert!(!command
             .get_envs()
             .any(|(key, _)| key == "REPONIQ_GIT_TOKEN"));
         let output = credential_with_auth(
             "fill",
             "protocol=https\nhost=github.com\npath=owner/project.git\n\n",
-            CloneAuthentication::PublicGithub,
+            authentication,
         );
         assert!(!output.status.success());
         assert!(!String::from_utf8_lossy(&output.stdout).contains("stale-secret"));
+    }
+
+    #[test]
+    fn private_github_clone_uses_repository_transport_policy() {
+        let authentication = CloneAuthentication::Github(GithubCredentials {
+            token: "fixture-secret".into(),
+            full_name: "owner/project".into(),
+        });
+        assert_http_option(
+            &authentication,
+            "extraHeader",
+            "Authorization: stale-secret",
+            "",
+        );
+        assert_http_option(&authentication, "cookieFile", "fixture-cookies.txt", "");
+        assert_http_option(&authentication, "saveCookies", "true", "false");
+        assert_http_option(&authentication, "sslVerify", "false", "true");
+        assert_http_option(&authentication, "followRedirects", "true", "false");
+    }
+
+    fn assert_http_option(
+        authentication: &CloneAuthentication,
+        option: &str,
+        configured: &str,
+        expected: &str,
+    ) {
+        let remote = "https://github.com/owner/project.git";
+        let mut command = Command::new(crate::git_binary().unwrap());
+        command.args(["-c", &format!("http.{remote}.{option}={configured}")]);
+        authentication.configure(&mut command);
+        let output = command
+            .args([
+                "config",
+                "--get-urlmatch",
+                &format!("http.{option}"),
+                remote,
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), expected);
     }
 }

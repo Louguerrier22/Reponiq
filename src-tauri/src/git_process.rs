@@ -1,8 +1,9 @@
-use std::io::{self, PipeReader, PipeWriter, Read};
+use std::io::{self, PipeReader, PipeWriter, Read, Write};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 const OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
+pub(super) const INPUT_LIMIT: usize = 4 * 1024 * 1024;
 const DIAGNOSTIC_LIMIT: usize = 64 * 1024;
 
 pub(super) struct Output {
@@ -58,6 +59,32 @@ impl Stream {
 }
 
 pub(super) fn capture(command: Command, stdin: Stdio, timeout: Duration) -> Result<Output, Error> {
+    capture_inner(command, stdin, None, timeout, false)
+}
+
+pub(super) fn capture_worker(
+    command: Command,
+    input: &[u8],
+    timeout: Duration,
+    retain_worker_on_cleanup: bool,
+) -> Result<Output, Error> {
+    let (reader, writer) = io::pipe()?;
+    capture_inner(
+        command,
+        Stdio::from(reader),
+        Some((writer, input.to_vec())),
+        timeout,
+        retain_worker_on_cleanup,
+    )
+}
+
+fn capture_inner(
+    command: Command,
+    stdin: Stdio,
+    pending_input: Option<(PipeWriter, Vec<u8>)>,
+    timeout: Duration,
+    retain_worker_on_cleanup: bool,
+) -> Result<Output, Error> {
     #[cfg(all(target_os = "linux", not(test)))]
     let (mut command, owner) = linux::wrap(command).map_err(Error::Start)?;
     #[cfg(not(all(target_os = "linux", not(test))))]
@@ -70,7 +97,15 @@ pub(super) fn capture(command: Command, stdin: Stdio, timeout: Duration) -> Resu
         .stdin(stdin)
         .stdout(stdout_write)
         .stderr(stderr_write);
-    let mut process = platform::Process::spawn(command, owner).map_err(Error::Start)?;
+    let mut process =
+        platform::Process::spawn(command, owner, retain_worker_on_cleanup).map_err(Error::Start)?;
+    if let Some((mut writer, bytes)) = pending_input {
+        // Drain stdout and stderr concurrently. The pipe closes as soon as
+        // the supervised process tree closes stdin or consumes the payload.
+        std::thread::Builder::new().spawn(move || {
+            let _ = writer.write_all(&bytes);
+        })?;
+    }
     let start = Instant::now();
 
     let status = loop {
@@ -102,11 +137,19 @@ mod platform {
     use std::os::unix::process::CommandExt;
     use std::process::Child;
 
-    pub(super) struct Process(Option<Child>, Option<PipeWriter>);
+    pub(super) struct Process(Option<Child>, Option<PipeWriter>, bool);
 
     impl Process {
-        pub(super) fn spawn(mut command: Command, owner: Option<PipeWriter>) -> io::Result<Self> {
-            Ok(Self(Some(command.process_group(0).spawn()?), owner))
+        pub(super) fn spawn(
+            mut command: Command,
+            owner: Option<PipeWriter>,
+            retain_worker_on_cleanup: bool,
+        ) -> io::Result<Self> {
+            Ok(Self(
+                Some(command.process_group(0).spawn()?),
+                owner,
+                retain_worker_on_cleanup,
+            ))
         }
 
         pub(super) fn exited(&mut self) -> io::Result<bool> {
@@ -143,7 +186,12 @@ mod platform {
         pub(super) fn finish(&mut self) -> io::Result<ExitStatus> {
             if self.1.take().is_some() {
                 // Closing the control pipe asks the separate supervisor to clean up.
-                let child = self.0.take().expect("running supervisor");
+                let mut child = self.0.take().expect("running supervisor");
+                if self.2 {
+                    // Workspace I/O has its own admission permit. Keep it
+                    // occupied until the OS actually reaps the old worker.
+                    return child.wait();
+                }
                 return wait_for_supervisor(child);
             }
             self.exited()?;
