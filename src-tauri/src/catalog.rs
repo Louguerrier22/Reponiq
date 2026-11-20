@@ -459,7 +459,9 @@ pub async fn clone_repository(
                     full_name: repo.full_name,
                 })
             } else {
-                super::git_auth::CloneAuthentication::PublicGithub
+                super::git_auth::CloneAuthentication::PublicGithub {
+                    full_name: repo.full_name,
+                }
             },
         )
     };
