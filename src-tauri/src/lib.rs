@@ -32,6 +32,8 @@ mod storage;
 mod updater;
 mod workflow;
 mod workspace;
+#[doc(hidden)]
+pub use workspace::run_workspace_worker;
 
 #[derive(Clone)]
 struct State {
@@ -250,7 +252,7 @@ fn git_capture_impl(
     quiet_startup: bool,
     input: Option<&[u8]>,
 ) -> Result<String, String> {
-    use std::io::{Seek, SeekFrom};
+    use std::io::{Seek, Write};
     use std::process::Stdio;
     let mut arguments = args.iter().copied();
     let mut operation = "command";
@@ -264,6 +266,9 @@ fn git_capture_impl(
     }
     log::debug!(target: "reponiq::git", "{operation} started in {}", path.display());
     let mut command = Command::new(git_binary()?);
+    command
+        .env_remove("REPONIQ_GIT_TOKEN")
+        .env_remove("REPONIQ_GIT_PATH");
     #[cfg(target_os = "linux")]
     for selector in [
         "GIT_DIR",
@@ -337,11 +342,14 @@ fn git_capture_impl(
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GCM_INTERACTIVE", "never");
-    let stdin = if let Some(input) = input {
-        use std::io::Write;
+    let stdin = if let Some(bytes) = input {
+        if bytes.len() > git_process::INPUT_LIMIT {
+            return Err("The selected paths are too large for one Git operation. Select fewer files and try again.".into());
+        }
+        // Prepare the entire path list before launching a mutating Git command.
         let mut file = tempfile::tempfile().map_err(err)?;
-        file.write_all(input).map_err(err)?;
-        file.seek(SeekFrom::Start(0)).map_err(err)?;
+        file.write_all(bytes).map_err(err)?;
+        file.rewind().map_err(err)?;
         Stdio::from(file)
     } else {
         Stdio::null()
@@ -774,9 +782,21 @@ fn list_repos_impl(state: &State) -> Result<Vec<Repo>, String> {
     }
     Ok(result)
 }
-fn add_repo_impl(path: String, state: &State) -> Result<Repo, String> {
-    let path = root(&path)?;
-    let canonical = path.to_string_lossy().to_string();
+#[derive(Serialize, Deserialize)]
+struct PreparedRepo {
+    path: String,
+    name: String,
+    remote: Option<String>,
+    #[cfg(target_os = "linux")]
+    identity: repository_identity::Identity,
+}
+
+fn prepare_repo(path: &str) -> Result<PreparedRepo, String> {
+    let path = root(path)?;
+    let canonical = path
+        .to_str()
+        .ok_or("The folder name is not UTF-8.")?
+        .to_owned();
     let name = path
         .file_name()
         .map(|x| x.to_string_lossy().to_string())
@@ -784,6 +804,23 @@ fn add_repo_impl(path: String, state: &State) -> Result<Repo, String> {
     let remote = git(&path, &["remote", "get-url", "origin"])
         .ok()
         .map(|url| safe_remote(&url));
+    Ok(PreparedRepo {
+        path: canonical,
+        name,
+        remote,
+        #[cfg(target_os = "linux")]
+        identity: repository_identity::observe(&path)?,
+    })
+}
+
+fn register_repo(prepared: PreparedRepo, state: &State) -> Result<Repo, String> {
+    let PreparedRepo {
+        path: canonical,
+        name,
+        remote,
+        #[cfg(target_os = "linux")]
+        identity,
+    } = prepared;
     let mut db = state.database.lock().map_err(err)?;
     let tx = db.transaction().map_err(err)?;
     tx.execute(
@@ -793,7 +830,7 @@ fn add_repo_impl(path: String, state: &State) -> Result<Repo, String> {
     .map_err(err)?;
     let row=tx.query_row("SELECT id,name,remote_url,pinned,collection,tags,ci_status,ci_conclusion FROM repos WHERE path=?1",[&canonical],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,i64>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,String>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,Option<String>>(7)?))).map_err(err)?;
     #[cfg(target_os = "linux")]
-    repository_identity::check(&tx, row.0, &path, false)?;
+    repository_identity::record_identity(&tx, row.0, &identity, false)?;
     record(
         &tx,
         Some(row.0),
@@ -1981,7 +2018,8 @@ async fn repo_summary(id: i64, state: tauri::State<'_, State>) -> Result<RepoSum
 }
 #[tauri::command]
 async fn add_repo(path: String, state: tauri::State<'_, State>) -> Result<Repo, String> {
-    background(state, move |state| add_repo_impl(path, state)).await
+    let prepared = workspace::prepare_import(path).await?;
+    background(state, move |state| register_repo(prepared, state)).await
 }
 #[tauri::command]
 async fn remove_repo(id: i64, state: tauri::State<'_, State>) -> Result<(), String> {

@@ -1,0 +1,49 @@
+use std::{
+    io::Write,
+    process::{Command, Stdio},
+};
+
+#[test]
+fn workspace_probe_returns_bounded_discovery_without_desktop_state() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("project/.git")).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_reponiq"))
+        .arg("--internal-workspace-probe")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    serde_json::to_writer(
+        child.stdin.take().unwrap(),
+        &serde_json::json!({"Discover":{"source":"folder","folder":root.path(),"default":null}}),
+    )
+    .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let response: Result<serde_json::Value, String> =
+        serde_json::from_slice(&output.stdout).unwrap();
+    let data = response.unwrap();
+    assert_eq!(data["items"][0]["name"], "project");
+    assert_eq!(data["limited"], false);
+}
+
+#[test]
+fn workspace_probe_rejects_an_oversized_request() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_reponiq"))
+        .arg("--internal-workspace-probe")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&vec![b' '; 512 * 1024 + 1])
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let response: Result<serde_json::Value, String> =
+        serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response, Err("Workspace request is too large.".into()));
+}

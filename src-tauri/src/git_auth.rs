@@ -54,6 +54,28 @@ const HELPER: &str = r#"!f() {
 impl GithubCredentials {
     pub fn configure(&self, command: &mut Command) {
         super::diagnostics::remember_secret(&self.token);
+        // Authenticated transfers own their command-level configuration and
+        // never write diagnostics or TLS session keys through inherited knobs.
+        for name in [
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_CURL_VERBOSE",
+            "GIT_SSL_NO_VERIFY",
+            "SSLKEYLOGFILE",
+            "GIT_SSL_KEYLOGFILE",
+        ] {
+            command.env_remove(name);
+        }
+        for name in [
+            "GIT_TRACE",
+            "GIT_TRACE_PACKET",
+            "GIT_TRACE_CURL",
+            "GIT_TRACE2",
+            "GIT_TRACE2_EVENT",
+            "GIT_TRACE2_PERF",
+        ] {
+            command.env(name, "0");
+        }
         command
             .args([
                 "-c",
@@ -64,6 +86,8 @@ impl GithubCredentials {
                 "credential.useHttpPath=true",
                 "-c",
                 "http.followRedirects=false",
+                "-c",
+                "http.https://github.com/.sslVerify=true",
             ])
             .env("REPONIQ_GIT_TOKEN", &self.token)
             .env("REPONIQ_GIT_PATH", format!("{}.git", self.full_name));

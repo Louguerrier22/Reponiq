@@ -298,9 +298,15 @@ fn clone_local(
     credentials: Option<&super::git_auth::CloneAuthentication>,
 ) -> Result<NewDirectory, String> {
     let target = NewDirectory::create(parent, name)?;
+    let authenticated = credentials.is_some_and(super::git_auth::CloneAuthentication::uses_account);
+    let mut args = vec!["clone", "--quiet"];
+    if authenticated {
+        args.push("--no-checkout");
+    }
+    args.extend(["--", url, "."]);
     super::git_capture_impl(
         &target.path,
-        &["clone", "--quiet", "--", url, "."],
+        &args,
         true,
         Some(target.dir()),
         credentials,
@@ -308,6 +314,17 @@ fn clone_local(
         None,
     )
     .map_err(|error| format!("{error} Partial files are preserved; inspect the destination before retrying with a new folder name."))?;
+    // Checkout may invoke configured filters or hooks. Keep the app token
+    // confined to the transport, and leave unborn or missing remote HEADs alone.
+    if authenticated
+        && target
+            .git(&["rev-parse", "--verify", "--quiet", "HEAD"])
+            .is_ok()
+    {
+        target.git(&["checkout", "--force"]).map_err(|error| {
+            format!("{error} The repository was downloaded. Check the destination before retrying.")
+        })?;
+    }
     Ok(target)
 }
 

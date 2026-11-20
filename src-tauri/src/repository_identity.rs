@@ -206,18 +206,32 @@ fn verify_admin(path: &Path, directory: &Dir) -> Result<bool, String> {
     Ok(true)
 }
 
-pub(super) fn check(db: &Connection, id: i64, path: &Path, rebind: bool) -> Result<(), String> {
+pub(super) type Identity = (String, String, String);
+
+pub(super) fn observe(path: &Path) -> Result<Identity, String> {
     let directory = open_directory(path)?;
     if !verify_admin(path, &directory)? {
         return Err(MOVED.into());
     }
     let metadata = directory.dir_metadata().map_err(super::err)?;
     let label = path.to_str().ok_or("The repository path is not UTF-8.")?;
-    let identity = (
+    Ok((
         label.to_owned(),
         metadata.dev().to_string(),
         metadata.ino().to_string(),
-    );
+    ))
+}
+
+pub(super) fn check(db: &Connection, id: i64, path: &Path, rebind: bool) -> Result<(), String> {
+    record_identity(db, id, &observe(path)?, rebind)
+}
+
+pub(super) fn record_identity(
+    db: &Connection,
+    id: i64,
+    identity: &Identity,
+    rebind: bool,
+) -> Result<(), String> {
     let saved = db
         .query_row(
             "SELECT path,device,inode FROM linux_repository_identity WHERE repo_id=?1",
@@ -232,10 +246,10 @@ pub(super) fn check(db: &Connection, id: i64, path: &Path, rebind: bool) -> Resu
         )
         .optional()
         .map_err(super::err)?;
-    if !rebind && saved.as_ref().is_some_and(|saved| saved != &identity) {
+    if !rebind && saved.as_ref().is_some_and(|saved| saved != identity) {
         return Err(MOVED.into());
     }
-    if rebind && saved.as_ref() != Some(&identity) {
+    if rebind && saved.as_ref() != Some(identity) {
         db.execute("INSERT INTO linux_repository_identity(repo_id,path,device,inode) VALUES(?1,?2,?3,?4)
             ON CONFLICT(repo_id) DO UPDATE SET path=excluded.path, device=excluded.device, inode=excluded.inode",
             params![id,identity.0,identity.1,identity.2]).map_err(super::err)?;
