@@ -243,7 +243,9 @@ mod tests {
                 }
             }
             "helper" => {
-                fs::write(directory.join("ready"), std::process::id().to_string()).unwrap();
+                let pending = directory.join("ready.tmp");
+                fs::write(&pending, std::process::id().to_string()).unwrap();
+                fs::rename(pending, directory.join("ready")).unwrap();
                 std::thread::sleep(Duration::from_secs(30));
             }
             "exit" | "timeout" => {
