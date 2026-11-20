@@ -1,26 +1,38 @@
 {
   "name": "reponiq",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "svelte-check --tsconfig ./tsconfig.json && vite build",
-    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "build": "tsc --noEmit && vite build",
+    "check": "tsc --noEmit",
     "test": "vitest run",
     "tauri": "tauri"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
-    "bits-ui": "2.21.0",
-    "lucide-svelte": "^0.468.0",
-    "svelte": "^5.0.0"
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "cmdk": "1.1.1",
+    "lucide-react": "1.77.0",
+    "mobx": "7.1.7",
+    "mobx-react-lite": "5.1.3",
+    "radix-ui": "1.8.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "sonner": "2.0.8",
+    "tailwind-merge": "3.7.1"
   },
   "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@tailwindcss/vite": "4.3.5",
     "@tauri-apps/cli": "^2.0.0",
     "@types/node": "^22.0.0",
-    "svelte-check": "^4.0.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "4.7.0",
+    "tailwindcss": "4.3.5",
+    "tw-animate-css": "1.4.0",
     "typescript": "~5.7.0",
     "vite": "^6.0.0",
     "vitest": "^4.1.12"

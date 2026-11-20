@@ -21,10 +21,12 @@ mod git_scratch;
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
 pub use git_process::run_git_supervisor;
+mod appearance;
 mod gitflow;
 mod launch_settings;
 mod oauth;
 mod pulls;
+mod registry_theme;
 mod repo_actions;
 #[cfg(target_os = "linux")]
 mod repository_identity;
@@ -1530,6 +1532,10 @@ pub fn run() {
             catalog::clone_repository_url,
             catalog::create_repository,
             workspace::workspace_settings,
+            appearance::appearance_settings,
+            appearance::save_appearance,
+            appearance::advance_setup,
+            registry_theme::preview_registry_theme,
             launch_settings::fetch_settings,
             launch_settings::save_fetch_settings,
             launch_settings::launch_fetch,

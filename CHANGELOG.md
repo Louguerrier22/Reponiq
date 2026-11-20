@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0
+
+- Reponiq now uses React and shadcn/ui for its sidebar, dialogs and controls, with the existing desktop theme.
+- Browse themes in Settings or during setup. Preview and apply external palettes from shadcn/ui, tweakcn or a supported theme link.
+- Overview puts latest activity above the repository results, with grid and row controls next to search.
+- Choose a repository when creating a collection and dismiss feedback from the bottom-right corner.
+
 ## 1.1.0
 
 - Commit all changes by default, or include or exclude checked files. The workbench shows the commit scope and offers direct access to the Git author fields when needed.

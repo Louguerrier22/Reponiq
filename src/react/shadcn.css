@@ -1,0 +1,33 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is([data-theme-mode="dark"] *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--registry-card-foreground, var(--foreground));
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--registry-popover-foreground, var(--foreground));
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--registry-secondary, var(--muted));
+  --color-secondary-foreground: var(--registry-secondary-foreground, var(--foreground));
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--registry-accent, var(--muted));
+  --color-accent-foreground: var(--registry-accent-foreground, var(--foreground));
+  --color-destructive: var(--registry-destructive, var(--danger));
+  --color-border: var(--border);
+  --color-input: var(--registry-input, var(--border));
+  --color-ring: var(--ring);
+  --color-sidebar: var(--registry-sidebar, var(--background));
+  --color-sidebar-foreground: var(--registry-sidebar-foreground, var(--foreground));
+  --color-sidebar-primary: var(--registry-sidebar-primary, var(--primary));
+  --color-sidebar-primary-foreground: var(--registry-sidebar-primary-foreground, var(--primary-foreground));
+  --color-sidebar-accent: var(--registry-sidebar-accent, var(--muted));
+  --color-sidebar-accent-foreground: var(--registry-sidebar-accent-foreground, var(--foreground));
+  --color-sidebar-border: var(--registry-sidebar-border, var(--border));
+  --color-sidebar-ring: var(--registry-sidebar-ring, var(--ring));
+}

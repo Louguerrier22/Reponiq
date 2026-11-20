@@ -1,5 +1,6 @@
 import { invoke } from './diagnostics';
 import { remoteInfo } from './platform';
+import type { AppearanceSettings, RegistryTheme, SetupStep, Theme } from './appearance';
 export type Repo = { id: number; registration?:string|null; path: string; name: string; remote_url: string | null; pinned: boolean; collection: string | null; tags: string[]; branch: string; dirty: number; ahead: number; behind: number; github_full_name: string | null; ci_conclusion: string | null; ci_status: string | null; status_error?: string | null;status_pending?:boolean; conflicts?:number; missing?:boolean };
 export type RepoSummary = Pick<Repo,'id'|'path'|'registration'|'branch'|'dirty'|'ahead'|'behind'|'status_error'|'conflicts'|'missing'>;
 export type Target = Pick<Repo,'id'|'path'|'registration'>;
@@ -45,6 +46,10 @@ export type DiscoveredRepo = {name:string;path:string;source:string};
 export type Discovery = {items:DiscoveredRepo[];limited:boolean;notes:string[]};
 export type ImportSource = 'default_folder'|'folder'|'github_desktop'|'vs_code';
 export const api = {
+  appearance: () => invoke<AppearanceSettings>('appearance_settings'),
+  saveAppearance: (input: Theme) => invoke<Theme>('save_appearance', { input }),
+  previewRegistryTheme: (url: string) => invoke<RegistryTheme>('preview_registry_theme', { url }),
+  advanceSetup: (expected: SetupStep) => invoke<SetupStep>('advance_setup', { expected }),
   walkthroughSeen: () => invoke<boolean>('walkthrough_seen'),
   finishWalkthrough: () => invoke<void>('finish_walkthrough'),
   onlineRepos: (accountId:number,page=1) => invoke<Page<OnlineRepo>>('list_online_repos',{accountId,page}),

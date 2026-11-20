@@ -39,15 +39,16 @@ for name,version,license,source,refs,authors in entries:
  lines.extend([f'{name} {version}',f'License: {license}',f'Source: {source}'])
  if authors:lines.append('Authors: '+'; '.join(authors))
  lines.extend(['License texts: '+(', '.join(refs) if refs else 'See versioned upstream source.'),''])
-lines+=['ADAPTED UI COMPONENTS', '', 'shadcn-svelte (MIT), adapted for the Reponiq theme.',
-        'Source: https://github.com/huntabyte/shadcn-svelte/tree/c3b21a62055c7d7b97a220eb5a9efb4d1b7fc8fc/docs/src/lib/registry/ui',
-        Path('src/lib/ui/LICENSE.shadcn-svelte.md').read_text(encoding='utf-8').strip(), '']
+lines+=['ADAPTED UI COMPONENTS', '', 'shadcn/ui (MIT), adapted for the Reponiq theme.',
+        'Source: https://ui.shadcn.com/r/styles/new-york-v4/',
+        Path('src/react/shadcn/LICENSE.md').read_text(encoding='utf-8').strip(), '']
 lines+=['PLATFORM MARKS', '', Path('assets/platforms/README.md').read_text(encoding='utf-8'), '']
 for asset_license in ['GITEA-LICENSE.txt', 'CC0-LICENSE.txt']:
  lines += [asset_license, Path('assets/platforms', asset_license).read_text(encoding='utf-8'), '']
 lines+=['LICENSE TEXTS','']
 for digest,text in sorted(texts.items()):lines.extend(['----- '+digest+' -----',text,''])
-Path('THIRD_PARTY_NOTICES.txt').write_text('\n'.join(lines),encoding='utf-8')
+notice='\n'.join(lines)
+Path('THIRD_PARTY_NOTICES.txt').write_text('\n'.join(line.rstrip() for line in notice.split('\n')),encoding='utf-8')
 Path('.work').mkdir(exist_ok=True)
 Path('.work/license-inventory.json').write_text(json.dumps({'packages':len(entries),'texts':len(texts),'missing_license_files':missing},indent=2))
 print(json.dumps({'packages':len(entries),'unique_license_texts':len(texts),'missing_license_files':missing}))
