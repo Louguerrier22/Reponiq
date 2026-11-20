@@ -1495,6 +1495,15 @@ pub fn run() {
 mod tests {
     use super::*;
     #[test]
+    fn embedded_sqlite_includes_the_wal_memory_disclosure_fix() {
+        assert!(
+            rusqlite::version_number() >= 3_054_000,
+            "Expected a patched SQLite bundle, got {}",
+            rusqlite::version()
+        );
+    }
+
+    #[test]
     fn github_remote_formats() {
         assert_eq!(
             full_name("git@github.com:org/repo.git"),
