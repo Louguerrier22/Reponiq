@@ -235,6 +235,8 @@ struct TokenResponse {
     error: Option<String>,
     interval: Option<u64>,
 }
+const RECONNECT_EXPIRED: &str = "GitHub sign-in expired. Reconnect this account.";
+const RECOVERY_PENDING: &str = "Reponiq saved the new GitHub sign-in but could not finish updating the credential store. Unlock it and retry.";
 #[derive(Serialize, Deserialize, Clone)]
 pub(super) struct Credential {
     version: u8,
@@ -312,6 +314,40 @@ impl Credential {
             account_created_at: None,
             previous_access_token: None,
         })
+    }
+
+    fn repair_mirror(
+        &self,
+        raw: Option<&str>,
+        write: impl FnOnce(&str) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if raw != Some(self.access_token.as_str()) {
+            write(&self.access_token).map_err(|_| RECOVERY_PENDING.to_owned())?;
+        }
+        Ok(())
+    }
+
+    fn persist_rotation(
+        &self,
+        write_sidecar: impl FnOnce(&str) -> Result<(), String>,
+        write_mirror: impl FnOnce(&str) -> Result<(), String>,
+    ) -> Result<(), String> {
+        // The sidecar carries the new refresh token and the previous mirror.
+        // The current app can finish mirroring it on its next successful read.
+        write_sidecar(&serde_json::to_string(self).map_err(lock_error)?)?;
+        self.repair_mirror(self.previous_access_token.as_deref(), write_mirror)
+    }
+}
+
+fn received_rotation(response: TokenResponse, client_id: String) -> Result<Credential, String> {
+    match response.error.as_deref() {
+        Some("bad_refresh_token" | "expired_token" | "invalid_grant") => {
+            Err(RECONNECT_EXPIRED.into())
+        }
+        Some(_) => {
+            Err("Could not refresh GitHub sign-in. Try again or reconnect this account.".into())
+        }
+        None => Credential::from_response(response, client_id),
     }
 }
 #[derive(Serialize)]
@@ -510,6 +546,21 @@ pub(super) async fn account_token(
         .expires_at
         .is_some_and(|expiry| expiry <= super::now() + 60)
     {
+        if raw.as_deref() != Some(credential.access_token.as_str()) {
+            let token = credential.access_token.clone();
+            background(state, move |state| {
+                let sidecar = entry(state.credential_service, id, true)?;
+                let mirror = entry(state.credential_service, id, false)?;
+                if read_secret(&sidecar)?.as_deref() != Some(metadata.as_str())
+                    || read_secret(&mirror)? != raw
+                {
+                    return Err("GitHub sign-in changed. Try again.".into());
+                }
+                credential.repair_mirror(raw.as_deref(), |value| write_secret(&mirror, Some(value)))
+            })
+            .await?;
+            return Ok(token);
+        }
         return Ok(credential.access_token);
     }
     let refresh = credential
@@ -520,7 +571,7 @@ pub(super) async fn account_token(
                 .refresh_expires_at
                 .is_some_and(|expiry| expiry <= super::now())
         })
-        .ok_or("GitHub sign-in expired. Reconnect this account.")?;
+        .ok_or(RECONNECT_EXPIRED)?;
     let response = gh_client()?
         .post(TOKEN_URL)
         .header("Accept", "application/json")
@@ -533,21 +584,22 @@ pub(super) async fn account_token(
         .await
         .map_err(|_| "Could not refresh GitHub sign-in. Check your connection and try again.")?;
     let response: TokenResponse = json_body(response).await?;
-    let mut credential = Credential::from_response(response, credential.client_id)?;
+    let mut credential = received_rotation(response, credential.client_id)?;
     credential.bind_account(&login, created_at);
     credential.previous_access_token = raw;
     let token = credential.access_token.clone();
     super::diagnostics::remember_secret(&token);
     background(state, move |state| {
-        // Persist the rotated refresh token first: it is the recovery authority if
-        // updating the legacy access-token mirror subsequently fails.
-        write_secret(
-            &entry(state.credential_service, id, true)?,
-            Some(&serde_json::to_string(&credential).map_err(lock_error)?),
-        )?;
-        write_secret(
-            &entry(state.credential_service, id, false)?,
-            Some(&credential.access_token),
+        let sidecar = entry(state.credential_service, id, true)?;
+        let mirror = entry(state.credential_service, id, false)?;
+        if read_secret(&sidecar)?.as_deref() != Some(metadata.as_str())
+            || read_secret(&mirror)?.as_deref() != credential.previous_access_token.as_deref()
+        {
+            return Err("GitHub sign-in changed. Try again.".into());
+        }
+        credential.persist_rotation(
+            |value| write_secret(&sidecar, Some(value)),
+            |value| write_secret(&mirror, Some(value)),
         )
     })
     .await?;
@@ -557,6 +609,64 @@ pub(super) async fn account_token(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interrupted_rotation_repairs_the_mirror_after_reopening() {
+        let old = "previous-access-fixture";
+        let new = "new-access-fixture";
+        let mut credential = received_rotation(
+            serde_json::from_str(r#"{"access_token":"new-access-fixture","token_type":"bearer","refresh_token":"new-refresh-fixture","expires_in":3600}"#).unwrap(),
+            "fixture-client".into(),
+        ).unwrap();
+        credential.bind_account("fixture-login", 100);
+        credential.previous_access_token = Some(old.into());
+        let mut sidecar = String::new();
+        let failed = credential.persist_rotation(
+            |value| {
+                sidecar = value.to_owned();
+                Ok(())
+            },
+            |_| Err("test storage stopped".into()),
+        );
+        assert_eq!(failed.unwrap_err(), RECOVERY_PENDING);
+
+        let reopened: Credential = serde_json::from_str(&sidecar).unwrap();
+        assert_eq!(
+            reopened.refresh_token.as_deref(),
+            Some("new-refresh-fixture")
+        );
+        reopened
+            .validate_binding("fixture-login", 100, Some(old))
+            .unwrap();
+        let mut mirror = old.to_owned();
+        reopened
+            .repair_mirror(Some(old), |value| {
+                mirror = value.to_owned();
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(mirror, new);
+        reopened
+            .validate_binding("fixture-login", 100, Some(&mirror))
+            .unwrap();
+        reopened
+            .repair_mirror(Some(&mirror), |_| panic!("retry must be idempotent"))
+            .unwrap();
+        assert!(reopened
+            .validate_binding("another-login", 100, Some(old))
+            .is_err());
+    }
+
+    #[test]
+    fn invalidated_refresh_credentials_request_reconnection() {
+        let response = serde_json::from_str(r#"{"error":"bad_refresh_token"}"#).unwrap();
+        assert_eq!(
+            received_rotation(response, "fixture-client".into())
+                .err()
+                .unwrap(),
+            RECONNECT_EXPIRED
+        );
+    }
     #[test]
     fn old_writer_account_id_reuse_cannot_select_an_orphaned_oauth_identity() {
         let raw =

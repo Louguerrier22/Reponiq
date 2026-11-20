@@ -67,6 +67,10 @@ Windows creates each destination atomically with a protected private DACL for th
 
 Git is resolved from absolute PATH entries to an absolute executable before changing the child's working directory. A git executable in cloned contents is not selected. Git hooks, filters and configured helpers remain the existing system Git trust boundary; only trusted repositories and parent folders should be used.
 
+Linux checks the owner and permissions of directory components and opens them without following aliases before running Git. Git starts from the verified working-directory handle. Linked worktrees also check their Git metadata locations. The first access to an existing registration in a trusted location records the folder's device and inode. If the folder object changes, use **Locate folder** to confirm it again. The identity table is additive, so earlier versions can still read the workspace. Earlier versions do not enforce the new identity check. Relinking with an earlier version requires reviewing the new location when returning to this version.
+
+The app continues to store GitHub credentials in the OS keyring using the existing format. Once rotation saves the new credential, a later read can repair an interrupted update to the older token entry. If GitHub has invalidated the previous refresh token before the new one reaches the keyring, reconnect that account.
+
 Git stdout and stderr use pipes with a 4 MiB limit per stream. The app retains up to 64 KiB of stderr for diagnostics and writes no captured output to temporary files. Windows assigns Git to a kill-on-close job before resuming its initial thread. Linux gives Git a dedicated process group and stops that group on timeout, capture failure or completion. Linux cleanup depends on Reponiq running and covers the original process group. Use trusted Git hooks and helpers.
 
 Supervised commands use Git's regular status scan so they do not start a persistent FSMonitor daemon. The temporary command override leaves repository and global Git settings intact.

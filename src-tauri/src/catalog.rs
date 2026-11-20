@@ -162,6 +162,8 @@ impl NewDirectory {
         use cap_fs_ext::DirExt;
         let target = destination(parent, name)?;
         let parent = target.parent().ok_or("Missing parent folder.")?;
+        #[cfg(target_os = "linux")]
+        super::repository_identity::open_directory(parent)?;
         let mut anchor = PathBuf::new();
         let mut parts = vec![];
         for part in parent.components() {
@@ -241,8 +243,9 @@ impl NewDirectory {
             .ok_or("Missing repository name.")?
             .to_string_lossy()
             .into_owned();
-        let db = state.database.lock().map_err(err)?;
-        db.execute(
+        let mut db = state.database.lock().map_err(err)?;
+        let tx = db.transaction().map_err(err)?;
+        tx.execute(
             "INSERT INTO repos(path,name,remote_url) VALUES(?1,?2,?3)",
             rusqlite::params![path, name, remote_url],
         )
@@ -250,9 +253,11 @@ impl NewDirectory {
             "The repository is ready but could not be registered. Add its folder manually."
                 .to_string()
         })?;
-        let id = db.last_insert_rowid();
+        let id = tx.last_insert_rowid();
+        #[cfg(target_os = "linux")]
+        super::repository_identity::check(&tx, id, &self.path, false)?;
         super::record(
-            &db,
+            &tx,
             Some(id),
             &format!("repo-added:{id}"),
             "repo",
@@ -260,9 +265,11 @@ impl NewDirectory {
             Some(&name),
             super::now(),
         )?;
+        let registration = super::workflow::registration(&tx, id)?;
+        tx.commit().map_err(err)?;
         Ok(Repo {
             id,
-            registration: super::workflow::registration(&db, id)?,
+            registration,
             path,
             name,
             github_full_name: remote_url.as_deref().and_then(super::full_name),

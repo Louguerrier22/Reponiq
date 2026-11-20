@@ -1,5 +1,6 @@
 use super::{
-    background, branch_name, err, full_name, gh_client, git, gitflow, oauth, repo_path, State,
+    background, branch_name, checked_repo_path, err, full_name, gh_client, git, gitflow, oauth,
+    State,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
@@ -389,9 +390,9 @@ async fn scoped_api(
         let (path, host) = {
             let db = s.database.lock().map_err(err)?;
             let path = if let Some(scope) = &expected {
-                scope.target.verify(&db)?
+                scope.target.verified_path(&db)?
             } else {
-                repo_path(&db, id)?
+                checked_repo_path(&db, id)?
             };
             let (host, login): (String, String) = db
                 .query_row(
@@ -529,7 +530,7 @@ pub async fn open_pull_check(
     number_valid(number)?;
     background(state, move |s| {
         use tauri_plugin_opener::OpenerExt;
-        let path = repo_path(&*s.database.lock().map_err(err)?, id)?;
+        let path = checked_repo_path(&*s.database.lock().map_err(err)?, id)?;
         let remote = git(&path, &["remote", "get-url", "origin"])?;
         let full = full_name(&remote).ok_or("This repository has no GitHub checks page.")?;
         app.opener()
@@ -689,7 +690,7 @@ pub async fn create_pull_request(
     let expected_head = input.expected_head.clone();
     background(state, move |s| {
         let _guard = gitflow::MUTATIONS.lock().map_err(err)?;
-        let path = repo_path(&*s.database.lock().map_err(err)?, id)?;
+        let path = checked_repo_path(&*s.database.lock().map_err(err)?, id)?;
         let current = gitflow::state(&path)?;
         gitflow::require_clean(&current)?;
         if current.branch != expected_branch

@@ -1,6 +1,6 @@
 use super::{
-    branch_name, err, git, git_exact, git_with_input, parse_changes, repo_path, Change, Commit,
-    State,
+    branch_name, checked_repo_path, err, git, git_exact, git_with_input, parse_changes, Change,
+    Commit, State,
 };
 use serde::Serialize;
 use std::{
@@ -582,7 +582,10 @@ pub async fn commit_details(
     state: tauri::State<'_, State>,
 ) -> Result<CommitDetails, String> {
     super::background(state, move |s| {
-        commit_details_impl(&repo_path(&*s.database.lock().map_err(err)?, id)?, &hash)
+        commit_details_impl(
+            &checked_repo_path(&*s.database.lock().map_err(err)?, id)?,
+            &hash,
+        )
     })
     .await
 }
@@ -594,7 +597,7 @@ pub async fn commit_diff(
     state: tauri::State<'_, State>,
 ) -> Result<String, String> {
     super::background(state, move |s| {
-        let path = repo_path(&*s.database.lock().map_err(err)?, id)?;
+        let path = checked_repo_path(&*s.database.lock().map_err(err)?, id)?;
         let parents = parents(&path, &hash)?;
         if let Some(file) = file.as_deref() {
             file_path(file)?;
@@ -640,7 +643,7 @@ pub async fn history_page(
                     .into(),
             );
         }
-        let path = repo_path(&*s.database.lock().map_err(err)?, id)?;
+        let path = checked_repo_path(&*s.database.lock().map_err(err)?, id)?;
         if !state_has_head(&path) {
             return Ok(vec![]);
         }
@@ -739,7 +742,10 @@ pub async fn conflict_details(
     state: tauri::State<'_, State>,
 ) -> Result<ConflictDetails, String> {
     super::background(state, move |s| {
-        conflict_details_impl(&repo_path(&*s.database.lock().map_err(err)?, id)?, &file)
+        conflict_details_impl(
+            &checked_repo_path(&*s.database.lock().map_err(err)?, id)?,
+            &file,
+        )
     })
     .await
 }
