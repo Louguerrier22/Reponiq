@@ -1,5 +1,5 @@
-use std::io::{self, PipeReader, Read};
-use std::process::{Command, ExitStatus};
+use std::io::{self, PipeReader, PipeWriter, Read};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 const OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
@@ -57,13 +57,20 @@ impl Stream {
     }
 }
 
-pub(super) fn capture(mut command: Command, timeout: Duration) -> Result<Output, Error> {
+pub(super) fn capture(command: Command, stdin: Stdio, timeout: Duration) -> Result<Output, Error> {
+    #[cfg(all(target_os = "linux", not(test)))]
+    let (mut command, owner) = linux::wrap(command).map_err(Error::Start)?;
+    #[cfg(not(all(target_os = "linux", not(test))))]
+    let (mut command, owner) = (command, None::<PipeWriter>);
     let (stdout, stdout_write) = platform::pipe()?;
     let (stderr, stderr_write) = platform::pipe()?;
     let mut stdout = Stream::new(stdout, OUTPUT_LIMIT)?;
     let mut stderr = Stream::new(stderr, DIAGNOSTIC_LIMIT)?;
-    command.stdout(stdout_write).stderr(stderr_write);
-    let mut process = platform::Process::spawn(command).map_err(Error::Start)?;
+    command
+        .stdin(stdin)
+        .stdout(stdout_write)
+        .stderr(stderr_write);
+    let mut process = platform::Process::spawn(command, owner).map_err(Error::Start)?;
     let start = Instant::now();
 
     let status = loop {
@@ -95,11 +102,11 @@ mod platform {
     use std::os::unix::process::CommandExt;
     use std::process::Child;
 
-    pub(super) struct Process(Option<Child>);
+    pub(super) struct Process(Option<Child>, Option<PipeWriter>);
 
     impl Process {
-        pub(super) fn spawn(mut command: Command) -> io::Result<Self> {
-            Ok(Self(Some(command.process_group(0).spawn()?)))
+        pub(super) fn spawn(mut command: Command, owner: Option<PipeWriter>) -> io::Result<Self> {
+            Ok(Self(Some(command.process_group(0).spawn()?), owner))
         }
 
         pub(super) fn exited(&mut self) -> io::Result<bool> {
@@ -134,6 +141,11 @@ mod platform {
         }
 
         pub(super) fn finish(&mut self) -> io::Result<ExitStatus> {
+            if self.1.take().is_some() {
+                // Closing the control pipe asks the separate supervisor to clean up.
+                let child = self.0.take().expect("running supervisor");
+                return wait_for_supervisor(child);
+            }
             self.exited()?;
             let child = self.0.as_mut().expect("running child");
             if unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) } == -1 {
@@ -145,6 +157,24 @@ mod platform {
             let status = child.wait()?;
             self.0 = None;
             Ok(status)
+        }
+    }
+
+    fn wait_for_supervisor(mut child: Child) -> io::Result<ExitStatus> {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Some(status) = child.try_wait()? {
+                return Ok(status);
+            }
+            if Instant::now() >= deadline {
+                // An uninterruptible Git process can delay cleanup. Leave the
+                // supervisor alive so the kernel can finish terminating it.
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                return Err(io::ErrorKind::TimedOut.into());
+            }
+            std::thread::sleep(Duration::from_millis(5));
         }
     }
 
@@ -203,6 +233,11 @@ mod platform {
 #[cfg(windows)]
 #[path = "git_process/windows.rs"]
 mod platform;
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::run_git_supervisor;
 
 #[cfg(test)]
 mod tests {
@@ -268,7 +303,11 @@ mod tests {
     fn capture_limits_each_stream() {
         let directory = tempfile::tempdir().unwrap();
         for mode in ["stdout", "stderr"] {
-            let result = capture(fixture(mode, directory.path()), Duration::from_secs(10));
+            let result = capture(
+                fixture(mode, directory.path()),
+                Stdio::null(),
+                Duration::from_secs(10),
+            );
             assert!(
                 matches!(result, Err(Error::OutputLimit)),
                 "unexpected outcome for {mode}"
@@ -281,14 +320,20 @@ mod tests {
     fn helpers_stop_on_normal_completion_and_timeout() {
         let completed = tempfile::tempdir().unwrap();
         let timed_out = tempfile::tempdir().unwrap();
-        assert!(
-            capture(fixture("exit", completed.path()), Duration::from_secs(6))
-                .unwrap()
-                .status
-                .success()
-        );
+        assert!(capture(
+            fixture("exit", completed.path()),
+            Stdio::null(),
+            Duration::from_secs(6)
+        )
+        .unwrap()
+        .status
+        .success());
         assert!(matches!(
-            capture(fixture("timeout", timed_out.path()), Duration::from_secs(3)),
+            capture(
+                fixture("timeout", timed_out.path()),
+                Stdio::null(),
+                Duration::from_secs(3)
+            ),
             Err(Error::Timeout)
         ));
         for directory in [&completed, &timed_out] {

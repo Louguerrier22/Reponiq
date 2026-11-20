@@ -17,6 +17,9 @@ mod create_directory;
 mod diagnostics;
 mod git_auth;
 mod git_process;
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use git_process::run_git_supervisor;
 mod gitflow;
 mod launch_settings;
 mod oauth;
@@ -343,7 +346,6 @@ fn git_capture_impl(
     } else {
         Stdio::null()
     };
-    command.stdin(stdin);
     let start = std::time::Instant::now();
     let cloning = args.first() == Some(&"clone");
     let deadline = if cloning {
@@ -356,7 +358,11 @@ fn git_capture_impl(
     } else {
         10
     };
-    let output = match git_process::capture(command, std::time::Duration::from_secs(deadline)) {
+    let output = match git_process::capture(
+        command,
+        stdin,
+        std::time::Duration::from_secs(deadline),
+    ) {
         Ok(output) => output,
         Err(git_process::Error::Start(error)) => {
             log::error!(target: "reponiq::git", "{operation} could not start: {error}");
@@ -1227,7 +1233,7 @@ async fn connect_account(
     api_host: String,
     state: tauri::State<'_, State>,
 ) -> Result<Account, String> {
-    let _account_guard = oauth::ACCOUNT_LOCK.lock().await;
+    let _account_guard = oauth::lock_account().await?;
     let host = validate_host(&api_host)?;
     if token.trim().is_empty() || token.len() > 4096 {
         return Err("Enter a valid GitHub token.".into());
@@ -1317,7 +1323,7 @@ fn disconnect_account_impl(id: i64, state: &State) -> Result<(), String> {
 }
 #[tauri::command]
 async fn sync_account(id: i64, state: tauri::State<'_, State>) -> Result<String, String> {
-    let _account_guard = oauth::ACCOUNT_LOCK.lock().await;
+    let _account_guard = oauth::lock_account().await?;
     let (login, host) = {
         let db = state.database.lock().map_err(err)?;
         db.query_row(
@@ -2029,7 +2035,7 @@ async fn list_accounts(state: tauri::State<'_, State>) -> Result<Vec<Account>, S
 }
 #[tauri::command]
 async fn disconnect_account(id: i64, state: tauri::State<'_, State>) -> Result<(), String> {
-    let _account_guard = oauth::ACCOUNT_LOCK.lock().await;
+    let _account_guard = oauth::lock_account().await?;
     background(state, move |state| disconnect_account_impl(id, state)).await
 }
 

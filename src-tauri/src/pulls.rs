@@ -439,7 +439,7 @@ pub async fn pull_context(
     account_id: i64,
     state: tauri::State<'_, State>,
 ) -> Result<PullContext, String> {
-    let _guard = oauth::ACCOUNT_LOCK.lock().await;
+    let _guard = oauth::lock_account().await?;
     let api = api(id, account_id, state).await?;
     let (repo, branches) = tokio::try_join!(
         api.get::<Repository>(""),
@@ -462,7 +462,7 @@ pub async fn list_pull_requests(
     if !(1..=400).contains(&page) {
         return Err("Pull-request paging limit reached.".into());
     }
-    let _guard = oauth::ACCOUNT_LOCK.lock().await;
+    let _guard = oauth::lock_account().await?;
     let api = api(id, account_id, state.clone()).await?;
     let (items, has_more) = api
         .request(
@@ -550,7 +550,7 @@ pub async fn pull_request_details(
     number: u64,
     state: tauri::State<'_, State>,
 ) -> Result<PullDetails, String> {
-    let _guard = oauth::ACCOUNT_LOCK.lock().await;
+    let _guard = oauth::lock_account().await?;
     let scope = PullScope {
         target,
         account_login,
@@ -572,7 +572,7 @@ pub async fn pull_request_files(
     if !(1..=30).contains(&page) {
         return Err("File paging limit reached. Use GitHub for the remaining files.".into());
     }
-    let _guard = oauth::ACCOUNT_LOCK.lock().await;
+    let _guard = oauth::lock_account().await?;
     let api = review.api(state).await?;
     let (items, has_more) = if let Some(sha) = commit {
         hash_valid(&sha)?;
@@ -611,7 +611,7 @@ pub async fn pull_request_commits(
     state: tauri::State<'_, State>,
 ) -> Result<Page<PullCommit>, String> {
     let number = review.number;
-    let _guard = oauth::ACCOUNT_LOCK.lock().await;
+    let _guard = oauth::lock_account().await?;
     let api = review.api(state).await?;
     let (items, has_more) = api
         .request(
@@ -648,7 +648,7 @@ pub async fn compare_pull_branches(
     if base == head {
         return Err("Choose different base and head branches.".into());
     }
-    let _guard = oauth::ACCOUNT_LOCK.lock().await;
+    let _guard = oauth::lock_account().await?;
     let api = api(id, account_id, state).await?;
     api.published_branch(&head, &expected_head).await?;
     let encoded_base = url::form_urlencoded::byte_serialize(base.as_bytes()).collect::<String>();
@@ -684,7 +684,7 @@ pub async fn create_pull_request(
     if input.base == input.head {
         return Err("Choose different base and head branches.".into());
     }
-    let _guard = oauth::ACCOUNT_LOCK.lock().await;
+    let _guard = oauth::lock_account().await?;
     let api = api(id, account_id, state.clone()).await?;
     let expected_branch = input.head.clone();
     let expected_head = input.expected_head.clone();
@@ -748,7 +748,7 @@ pub async fn review_pull_request(
 ) -> Result<Review, String> {
     let _update = super::updater::workspace_job()?;
     review_body(&event, &body)?;
-    let _guard = oauth::ACCOUNT_LOCK.lock().await;
+    let _guard = oauth::lock_account().await?;
     let api = api(id, account_id, state).await?;
     current_pull(&api.pull(number).await?, &head)?;
     api.request(
@@ -850,7 +850,7 @@ pub async fn merge_pull_request(
     state: tauri::State<'_, State>,
 ) -> Result<String, String> {
     let _update = super::updater::workspace_job()?;
-    let _guard = oauth::ACCOUNT_LOCK.lock().await;
+    let _guard = oauth::lock_account().await?;
     if review.target.registration.is_none() {
         return Err("Refresh the repository before merging.".into());
     }
