@@ -106,26 +106,35 @@ mod platform {
             // Keep the leader unreaped until cleanup, so its process group ID
             // cannot be reused between checking its status and signalling it.
             let child = self.0.as_ref().expect("running child");
-            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-            let result = unsafe {
-                libc::waitid(
-                    libc::P_PID,
-                    child.id(),
-                    &mut info,
-                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-                )
-            };
-            if result == -1 {
+            let id = child.id();
+            loop {
+                let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+                if unsafe {
+                    libc::waitid(
+                        libc::P_PID,
+                        id,
+                        &mut info,
+                        libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                    )
+                } == 0
+                {
+                    return Ok(unsafe { info.si_pid() } != 0);
+                }
                 let error = io::Error::last_os_error();
                 if error.kind() == io::ErrorKind::Interrupted {
-                    return Ok(false);
+                    continue;
+                }
+                if error.raw_os_error() == Some(libc::ECHILD) {
+                    // The OS auto-reaped the child or another waiter took it.
+                    // Its former ID must no longer be used for group cleanup.
+                    self.0 = None;
                 }
                 return Err(error);
             }
-            Ok(unsafe { info.si_pid() } != 0)
         }
 
         pub(super) fn finish(&mut self) -> io::Result<ExitStatus> {
+            self.exited()?;
             let child = self.0.as_mut().expect("running child");
             if unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) } == -1 {
                 let error = io::Error::last_os_error();
@@ -234,9 +243,8 @@ mod tests {
                 }
             }
             "helper" => {
-                fs::write(directory.join("ready"), b"ready").unwrap();
-                std::thread::sleep(Duration::from_secs(4));
-                fs::write(directory.join("finished"), b"finished").unwrap();
+                fs::write(directory.join("ready"), std::process::id().to_string()).unwrap();
+                std::thread::sleep(Duration::from_secs(30));
             }
             "exit" | "timeout" => {
                 // The production supervisor owns this intentionally long-running helper.
@@ -267,6 +275,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(windows, target_os = "linux"))]
     fn helpers_stop_on_normal_completion_and_timeout() {
         let completed = tempfile::tempdir().unwrap();
         let timed_out = tempfile::tempdir().unwrap();
@@ -281,11 +290,54 @@ mod tests {
             Err(Error::Timeout)
         ));
         for directory in [&completed, &timed_out] {
-            assert!(directory.path().join("ready").exists());
+            let pid = fs::read_to_string(directory.path().join("ready"))
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert_helper_stopped(pid);
         }
-        std::thread::sleep(Duration::from_millis(4200));
-        for directory in [&completed, &timed_out] {
-            assert!(!directory.path().join("finished").exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    fn assert_helper_stopped(pid: u32) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match fs::read_to_string(format!("/proc/{pid}/stat")) {
+                Ok(stat)
+                    if stat
+                        .rsplit_once(") ")
+                        .is_some_and(|(_, state)| state.starts_with("Z ")) =>
+                {
+                    return
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+                Ok(_) => {}
+                Err(error) => panic!("could not inspect the helper: {error}"),
+            }
+            assert!(Instant::now() < deadline, "helper {pid} is still running");
+            std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[cfg(windows)]
+    fn assert_helper_stopped(pid: u32) {
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, WAIT_OBJECT_0};
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+        };
+        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+        if handle.is_null() {
+            assert_eq!(
+                io::Error::last_os_error().raw_os_error(),
+                Some(ERROR_INVALID_PARAMETER as i32)
+            );
+            return;
+        }
+        let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+        assert_eq!(
+            unsafe { WaitForSingleObject(handle.as_raw_handle(), 2000) },
+            WAIT_OBJECT_0
+        );
     }
 }

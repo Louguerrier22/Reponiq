@@ -257,6 +257,9 @@ fn git_capture_impl(
     }
     log::debug!(target: "reponiq::git", "{operation} started in {}", path.display());
     let mut command = Command::new(git_binary()?);
+    // The supervisor owns short-lived commands. A new FSMonitor daemon would
+    // be stopped on exit, so these commands use Git's regular status scan.
+    command.args(["-c", "core.fsmonitor=false"]);
     if let Some(credentials) = credentials {
         credentials.configure(&mut command);
     }
@@ -331,12 +334,19 @@ fn git_capture_impl(
                 "Could not monitor Git. Check the repository before retrying an action.".into(),
             );
         }
-        Err(git_process::Error::Timeout | git_process::Error::OutputLimit) => {
-            log::error!(target: "reponiq::git", "{operation} stopped after {} ms: time/output limit reached", start.elapsed().as_millis());
+        Err(git_process::Error::Timeout) => {
+            log::error!(target: "reponiq::git", "{operation} stopped after {} ms: time limit reached", start.elapsed().as_millis());
             if cloning {
-                return Err("Clone exceeded its 15-minute time limit or output limit. Check the connection and destination folder before retrying.".into());
+                return Err("Clone exceeded its 15-minute time limit. Check the connection and destination folder before retrying.".into());
             }
-            return Err("Git exceeded its time or output limit. Check the repository before retrying an action.".into());
+            return Err(
+                "Git exceeded its time limit. Check the repository before retrying an action."
+                    .into(),
+            );
+        }
+        Err(git_process::Error::OutputLimit) => {
+            log::error!(target: "reponiq::git", "{operation} exceeded its output limit");
+            return Err("Git output is too large. Check the repository before retrying, or use Git in a terminal for the full output.".into());
         }
     };
     let status = output.status;

@@ -68,3 +68,5 @@ Windows creates each destination atomically with a protected private DACL for th
 Git is resolved from absolute PATH entries to an absolute executable before changing the child's working directory. A git executable in cloned contents is not selected. Git hooks, filters and configured helpers remain the existing system Git trust boundary; only trusted repositories and parent folders should be used.
 
 Git stdout and stderr use pipes with a 4 MiB limit per stream. The app retains up to 64 KiB of stderr for diagnostics and writes no captured output to temporary files. Windows assigns Git to a kill-on-close job before resuming its initial thread. Linux gives Git a dedicated process group and stops that group on timeout, capture failure or completion. Linux cleanup depends on Reponiq running and covers the original process group. Use trusted Git hooks and helpers.
+
+Supervised commands use Git's regular status scan so they do not start a persistent FSMonitor daemon. The temporary command override leaves repository and global Git settings intact.
