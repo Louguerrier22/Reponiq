@@ -7,7 +7,8 @@ use std::{
 use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
 
-pub(super) static ACCOUNT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+mod account_lock;
+pub(super) use account_lock::lock_account;
 const DEVICE_URL: &str = "https://github.com/login/device/code";
 const TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const VERIFY_URL: &str = "https://github.com/login/device";
@@ -496,7 +497,7 @@ pub async fn poll_github_login(
             .await?,
         )
         .await?;
-        let _account_guard = ACCOUNT_LOCK.lock().await;
+        let _account_guard = lock_account().await?;
         // Hold the flow lock only for the final blocking save. Cancellation that wins
         // this lock prevents persistence; a completed save wins before cancellation.
         background(state, move |state| {

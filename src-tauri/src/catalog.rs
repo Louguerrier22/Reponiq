@@ -371,7 +371,7 @@ pub async fn list_online_repos(
     state: tauri::State<'_, State>,
 ) -> Result<Page<OnlineRepo>, String> {
     page_valid(page)?;
-    let _guard = oauth::ACCOUNT_LOCK.lock().await;
+    let _guard = oauth::lock_account().await?;
     let api = api(account_id, state).await?;
     api.user().await?;
     let (items, has_more) = api
@@ -394,7 +394,7 @@ pub async fn repository_owners(
     state: tauri::State<'_, State>,
 ) -> Result<Page<Owner>, String> {
     page_valid(page)?;
-    let _guard = oauth::ACCOUNT_LOCK.lock().await;
+    let _guard = oauth::lock_account().await?;
     let api = api(account_id, state).await?;
     let user = api.user().await?;
     let (mut orgs, has_more, warning): (Vec<Owner>, bool,Option<String>) = match api.request(reqwest::Method::GET,&format!("/user/orgs?per_page=100&page={page}"),None).await {
@@ -426,7 +426,7 @@ pub async fn clone_repository(
     }
     name_valid(&name)?;
     let (remote, credentials) = {
-        let _guard = oauth::ACCOUNT_LOCK.lock().await;
+        let _guard = oauth::lock_account().await?;
         let api = api(account_id, state.clone()).await?;
         api.user().await?;
         let repo: OnlineRepo = api.get(&format!("/repositories/{repository_id}")).await?;
@@ -468,7 +468,11 @@ pub async fn create_repository(
 ) -> Result<Created, String> {
     let _update = super::updater::workspace_job()?;
     name_valid(&input.name)?;
-    let _account_guard = oauth::ACCOUNT_LOCK.lock().await;
+    let _account_guard = if input.account_id.is_some() {
+        Some(oauth::lock_account().await?)
+    } else {
+        None
+    };
     let remote = if let Some(id) = input.account_id {
         let api = api(id, state.clone()).await?;
         let user = api.user().await?;

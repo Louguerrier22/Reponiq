@@ -24,7 +24,7 @@ pub(super) struct Process {
 }
 
 impl Process {
-    pub(super) fn spawn(mut command: Command) -> io::Result<Self> {
+    pub(super) fn spawn(mut command: Command, _owner: Option<PipeWriter>) -> io::Result<Self> {
         let job = create_job()?;
         // Stable Rust doesn't expose the primary thread handle from spawn.
         // Keep the process suspended while we assign it and open that thread.

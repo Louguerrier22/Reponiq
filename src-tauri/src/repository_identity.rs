@@ -1,6 +1,7 @@
 use cap_fs_ext::DirExt;
 use cap_std::fs::{Dir, MetadataExt};
 use rusqlite::{params, Connection, OptionalExtension};
+use std::ffi::{OsStr, OsString};
 use std::io::{ErrorKind, Read};
 use std::path::{Component, Path};
 
@@ -30,6 +31,20 @@ pub(super) fn open_directory(path: &Path) -> Result<Dir, String> {
 }
 
 fn walk(path: &Path, ancestor: bool) -> Result<Dir, String> {
+    walk_with_alias_limit(path, ancestor, 0)
+}
+
+pub(super) fn open_login_home(path: &Path) -> Result<Dir, String> {
+    walk_with_alias_limit(path, false, 40)
+}
+
+fn components(path: &Path) -> impl DoubleEndedIterator<Item = OsString> + '_ {
+    path.components()
+        .filter(|part| !matches!(part, Component::RootDir | Component::CurDir))
+        .map(|part| part.as_os_str().to_owned())
+}
+
+fn walk_with_alias_limit(path: &Path, ancestor: bool, mut aliases: u8) -> Result<Dir, String> {
     if !path.is_absolute() {
         return Err(UNSAFE_PATH.into());
     }
@@ -40,16 +55,33 @@ fn walk(path: &Path, ancestor: bool) -> Result<Dir, String> {
         return Err(UNSAFE_PATH.into());
     }
     let mut directories = vec![root];
-    for part in path.components() {
-        let next = match part {
-            Component::RootDir | Component::CurDir => continue,
-            Component::ParentDir if directories.len() > 1 => {
-                directories.pop();
-                continue;
+    let mut pending: Vec<_> = components(path).rev().collect();
+    while let Some(part) = pending.pop() {
+        if part == OsStr::new("..") {
+            if directories.len() == 1 {
+                return Err(UNSAFE_PATH.into());
             }
-            Component::Normal(name) => directories.last().unwrap().open_dir_nofollow(name),
-            _ => return Err(UNSAFE_PATH.into()),
-        };
+            directories.pop();
+            continue;
+        }
+        let current = directories.last().unwrap();
+        let next = current.open_dir_nofollow(&part);
+        if next.is_err() && aliases > 0 {
+            if let Ok(metadata) = current.symlink_metadata(&part) {
+                if metadata.is_symlink() {
+                    if metadata.uid() != user && metadata.uid() != 0 {
+                        return Err(UNSAFE_PATH.into());
+                    }
+                    let target = current.read_link_contents(&part).map_err(super::err)?;
+                    if target.is_absolute() {
+                        directories.truncate(1);
+                    }
+                    pending.extend(components(&target).rev());
+                    aliases -= 1;
+                    continue;
+                }
+            }
+        }
         let next = next.map_err(|error| {
             if error.kind() == ErrorKind::NotFound {
                 "The repository folder is missing. Use Locate folder."
@@ -220,6 +252,19 @@ pub(super) fn check(db: &Connection, id: i64, path: &Path, rebind: bool) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trusted_login_home_aliases_preserve_one_directory_identity() {
+        let fixture = tempfile::tempdir().unwrap();
+        let home = fixture.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        let alias = fixture.path().join("alias");
+        std::os::unix::fs::symlink("home", &alias).unwrap();
+        let actual = open_login_home(&home).unwrap().dir_metadata().unwrap();
+        let linked = open_login_home(&alias).unwrap().dir_metadata().unwrap();
+        assert_eq!((linked.dev(), linked.ino()), (actual.dev(), actual.ino()));
+        assert!(open_directory(&alias).is_err());
+    }
 
     #[test]
     fn damaged_nested_repository_does_not_use_the_outer_checkout() {
