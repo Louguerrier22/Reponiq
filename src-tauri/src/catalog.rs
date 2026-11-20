@@ -162,8 +162,6 @@ impl NewDirectory {
         use cap_fs_ext::DirExt;
         let target = destination(parent, name)?;
         let parent = target.parent().ok_or("Missing parent folder.")?;
-        #[cfg(target_os = "linux")]
-        super::repository_identity::open_directory(parent)?;
         let mut anchor = PathBuf::new();
         let mut parts = vec![];
         for part in parent.components() {

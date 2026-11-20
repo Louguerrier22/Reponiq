@@ -286,13 +286,17 @@ fn git_capture_impl(
             .env("SSH_ASKPASS_REQUIRE", "never");
     }
     #[cfg(target_os = "linux")]
-    let checked_directory = repository_identity::open_for_git(path)?;
+    let checked_directory = if directory.is_none() {
+        let can_discover =
+            matches!(operation, "init" | "clone") || args == ["rev-parse", "--show-toplevel"];
+        Some(repository_identity::open_for_git(path, can_discover)?)
+    } else {
+        // Create/Clone already own a private retained capability. Continue on
+        // that object if the pathname moves, and verify it before registration.
+        None
+    };
     #[cfg(target_os = "linux")]
-    if let Some(held) = directory {
-        repository_identity::same_directory(held, &checked_directory)?;
-    }
-    #[cfg(target_os = "linux")]
-    let directory = Some(directory.unwrap_or(&checked_directory));
+    let directory = directory.or(checked_directory.as_ref());
     if let Some(directory) = directory {
         #[cfg(target_os = "linux")]
         {

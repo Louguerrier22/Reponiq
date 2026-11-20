@@ -107,9 +107,23 @@ fn read_admin_file(directory: &Dir, name: &str) -> Result<Option<String>, String
     Ok(Some(data))
 }
 
-pub(super) fn open_for_git(path: &Path) -> Result<Dir, String> {
+pub(super) fn open_for_git(path: &Path, can_discover: bool) -> Result<Dir, String> {
     let directory = open_directory(path)?;
     if !verify_admin(path, &directory)? {
+        if !can_discover {
+            // System Git may legitimately address a bare repository, but it
+            // must not fall back to an enclosing repo for normal commands.
+            if !check_admin_file(&directory, "HEAD")?
+                || !directory
+                    .symlink_metadata("objects")
+                    .is_ok_and(|m| m.is_dir())
+            {
+                return Err(MOVED.into());
+            }
+            open_directory(&path.join("objects"))?;
+            check_admin_file(&directory, "config")?;
+            return Ok(directory);
+        }
         // The folder picker accepts a subdirectory. Check the same ancestors
         // Git can discover before allowing it to read repository configuration.
         for parent in path.ancestors().skip(1) {
@@ -137,6 +151,9 @@ fn verify_admin(path: &Path, directory: &Dir) -> Result<bool, String> {
         Err(error) => return Err(super::err(error)),
     };
     let git_dir = open_directory(&admin)?;
+    if !check_admin_file(&git_dir, "HEAD")? {
+        return Err(MOVED.into());
+    }
     check_admin_file(&git_dir, "config")?;
     check_admin_file(&git_dir, "config.worktree")?;
     if let Some(common) = read_admin_file(&git_dir, "commondir")? {
@@ -144,23 +161,21 @@ fn verify_admin(path: &Path, directory: &Dir) -> Result<bool, String> {
         if common.is_empty() {
             return Err(UNSAFE_PATH.into());
         }
-        let common = open_directory(&admin.join(common))?;
+        let common_path = admin.join(common);
+        let common = open_directory(&common_path)?;
+        open_directory(&common_path.join("objects"))?;
         check_admin_file(&common, "config")?;
+    } else {
+        open_directory(&admin.join("objects"))?;
     }
     Ok(true)
 }
 
-pub(super) fn same_directory(first: &Dir, second: &Dir) -> Result<(), String> {
-    let first = first.dir_metadata().map_err(super::err)?;
-    let second = second.dir_metadata().map_err(super::err)?;
-    if (first.dev(), first.ino()) != (second.dev(), second.ino()) {
-        return Err(MOVED.into());
-    }
-    Ok(())
-}
-
 pub(super) fn check(db: &Connection, id: i64, path: &Path, rebind: bool) -> Result<(), String> {
     let directory = open_directory(path)?;
+    if !verify_admin(path, &directory)? {
+        return Err(MOVED.into());
+    }
     let metadata = directory.dir_metadata().map_err(super::err)?;
     let label = path.to_str().ok_or("The repository path is not UTF-8.")?;
     let identity = (
@@ -217,8 +232,10 @@ mod tests {
         let fixture = tempfile::tempdir().unwrap();
         let first = fixture.path().join("first");
         let second = fixture.path().join("second");
-        std::fs::create_dir(&first).unwrap();
-        std::fs::create_dir(&second).unwrap();
+        for directory in [&first, &second] {
+            std::fs::create_dir_all(directory.join(".git/objects")).unwrap();
+            std::fs::write(directory.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        }
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE repos(id INTEGER PRIMARY KEY, path TEXT, name TEXT); INSERT INTO repos VALUES(1,'old-path','repo');").unwrap();
         initialize(&db).unwrap();
@@ -227,6 +244,8 @@ mod tests {
         assert_eq!(check(&db, 1, &second, false).unwrap_err(), MOVED);
         check(&db, 1, &second, true).unwrap();
         check(&db, 1, &second, false).unwrap();
+        std::fs::rename(second.join(".git"), second.join("saved-metadata")).unwrap();
+        assert_eq!(check(&db, 1, &second, false).unwrap_err(), MOVED);
         assert_eq!(
             db.query_row("SELECT name FROM repos WHERE id=1", [], |row| row
                 .get::<_, String>(0))

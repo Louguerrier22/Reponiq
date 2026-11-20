@@ -118,12 +118,16 @@ pub struct LoginCode {
     interval: u64,
 }
 
-async fn json_body<T: DeserializeOwned>(mut response: reqwest::Response) -> Result<T, String> {
+async fn json_body<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, String> {
     if !response.status().is_success() {
         return Err(
             "GitHub could not complete sign-in. Check your connection and try again.".into(),
         );
     }
+    read_json_body(response).await
+}
+
+async fn read_json_body<T: DeserializeOwned>(mut response: reqwest::Response) -> Result<T, String> {
     let mut bytes = Vec::new();
     while let Some(chunk) = response
         .chunk()
@@ -339,16 +343,45 @@ impl Credential {
     }
 }
 
+fn needs_reconnect(error: Option<&str>) -> bool {
+    matches!(
+        error,
+        Some("bad_refresh_token" | "expired_token" | "invalid_grant")
+    )
+}
+
 fn received_rotation(response: TokenResponse, client_id: String) -> Result<Credential, String> {
     match response.error.as_deref() {
-        Some("bad_refresh_token" | "expired_token" | "invalid_grant") => {
-            Err(RECONNECT_EXPIRED.into())
-        }
+        error if needs_reconnect(error) => Err(RECONNECT_EXPIRED.into()),
         Some(_) => {
             Err("Could not refresh GitHub sign-in. Try again or reconnect this account.".into())
         }
         None => Credential::from_response(response, client_id),
     }
+}
+
+async fn rotation_response(
+    response: reqwest::Response,
+    client_id: String,
+) -> Result<Credential, String> {
+    let status = response.status();
+    if status.is_success() {
+        return received_rotation(read_json_body(response).await?, client_id);
+    }
+    if matches!(
+        status,
+        reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::UNAUTHORIZED
+    ) {
+        #[derive(Deserialize)]
+        struct ProviderError {
+            error: Option<String>,
+        }
+        let payload = read_json_body::<ProviderError>(response).await?;
+        if needs_reconnect(payload.error.as_deref()) {
+            return Err(RECONNECT_EXPIRED.into());
+        }
+    }
+    Err("Could not refresh GitHub sign-in. Check your connection and try again.".into())
 }
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -583,8 +616,7 @@ pub(super) async fn account_token(
         .send()
         .await
         .map_err(|_| "Could not refresh GitHub sign-in. Check your connection and try again.")?;
-    let response: TokenResponse = json_body(response).await?;
-    let mut credential = received_rotation(response, credential.client_id)?;
+    let mut credential = rotation_response(response, credential.client_id).await?;
     credential.bind_account(&login, created_at);
     credential.previous_access_token = raw;
     let token = credential.access_token.clone();
@@ -657,15 +689,42 @@ mod tests {
             .is_err());
     }
 
-    #[test]
-    fn invalidated_refresh_credentials_request_reconnection() {
-        let response = serde_json::from_str(r#"{"error":"bad_refresh_token"}"#).unwrap();
+    #[tokio::test]
+    async fn invalidated_refresh_credentials_request_reconnection() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            socket.read(&mut [0; 8192]).unwrap();
+            let body = r#"{"error":"bad_refresh_token"}"#;
+            write!(
+                socket,
+                "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap()
+            .get(url)
+            .send()
+            .await
+            .unwrap();
         assert_eq!(
-            received_rotation(response, "fixture-client".into())
+            rotation_response(response, "fixture-client".into())
+                .await
                 .err()
                 .unwrap(),
             RECONNECT_EXPIRED
         );
+        server.join().unwrap();
     }
     #[test]
     fn old_writer_account_id_reuse_cannot_select_an_orphaned_oauth_identity() {
