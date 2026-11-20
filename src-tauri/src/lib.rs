@@ -16,6 +16,7 @@ mod conflict_file;
 mod create_directory;
 mod diagnostics;
 mod git_auth;
+mod git_process;
 mod gitflow;
 mod launch_settings;
 mod oauth;
@@ -242,7 +243,7 @@ fn git_capture_impl(
     quiet_startup: bool,
     input: Option<&[u8]>,
 ) -> Result<String, String> {
-    use std::io::{Read, Seek, SeekFrom};
+    use std::io::{Seek, SeekFrom};
     use std::process::Stdio;
     let mut arguments = args.iter().copied();
     let mut operation = "command";
@@ -255,8 +256,6 @@ fn git_capture_impl(
         }
     }
     log::debug!(target: "reponiq::git", "{operation} started in {}", path.display());
-    let mut stdout = tempfile::tempfile().map_err(err)?;
-    let mut stderr = tempfile::tempfile().map_err(err)?;
     let mut command = Command::new(git_binary()?);
     if let Some(credentials) = credentials {
         credentials.configure(&mut command);
@@ -295,9 +294,7 @@ fn git_capture_impl(
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GCM_INTERACTIVE", "never")
-        .stdout(stdout.try_clone().map_err(err)?)
-        .stderr(stderr.try_clone().map_err(err)?);
+        .env("GCM_INTERACTIVE", "never");
     let stdin = if let Some(input) = input {
         use std::io::Write;
         let mut file = tempfile::tempfile().map_err(err)?;
@@ -308,15 +305,6 @@ fn git_capture_impl(
         Stdio::null()
     };
     command.stdin(stdin);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-    let mut child = command.spawn().map_err(|error| {
-        log::error!(target: "reponiq::git", "{operation} could not start: {error}");
-        "Could not start Git. Install Git and restart Reponiq.".to_string()
-    })?;
     let start = std::time::Instant::now();
     let cloning = args.first() == Some(&"clone");
     let deadline = if cloning {
@@ -329,28 +317,30 @@ fn git_capture_impl(
     } else {
         10
     };
-    const MAX_OUTPUT: u64 = 4 * 1024 * 1024;
-    let status = loop {
-        if let Some(status) = child.try_wait().map_err(err)? {
-            break status;
+    let output = match git_process::capture(command, std::time::Duration::from_secs(deadline)) {
+        Ok(output) => output,
+        Err(git_process::Error::Start(error)) => {
+            log::error!(target: "reponiq::git", "{operation} could not start: {error}");
+            return Err(
+                "Could not start Git. Check your Git installation and restart Reponiq.".into(),
+            );
         }
-        if start.elapsed().as_secs() >= deadline
-            || stdout.metadata().map_err(err)?.len() > MAX_OUTPUT
-            || stderr.metadata().map_err(err)?.len() > MAX_OUTPUT
-        {
-            let _ = child.kill();
-            let _ = child.wait();
+        Err(git_process::Error::Io(error)) => {
+            log::error!(target: "reponiq::git", "{operation} process supervision failed: {error}");
+            return Err(
+                "Could not monitor Git. Check the repository before retrying an action.".into(),
+            );
+        }
+        Err(git_process::Error::Timeout | git_process::Error::OutputLimit) => {
             log::error!(target: "reponiq::git", "{operation} stopped after {} ms: time/output limit reached", start.elapsed().as_millis());
             if cloning {
                 return Err("Clone exceeded its 15-minute time limit or output limit. Check the connection and destination folder before retrying.".into());
             }
             return Err("Git exceeded its time or output limit. Check the repository before retrying an action.".into());
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
     };
-    stderr.seek(SeekFrom::Start(0)).map_err(err)?;
-    let mut diagnostic = String::new();
-    stderr.take(65536).read_to_string(&mut diagnostic).ok();
+    let status = output.status;
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
     if !status.success() {
         log::error!(target: "reponiq::git", "{operation} failed ({status}) after {} ms\n{diagnostic}", start.elapsed().as_millis());
         if diagnostic.contains("detected dubious ownership") {
@@ -402,21 +392,12 @@ fn git_capture_impl(
     if !diagnostic.trim().is_empty() {
         log::info!(target: "reponiq::git", "{operation} output:\n{diagnostic}");
     }
-    if stdout.metadata().map_err(err)?.len() > MAX_OUTPUT {
-        return Err("Git output is too large. Use your Git terminal for the full output.".into());
-    }
-    stdout.seek(SeekFrom::Start(0)).map_err(err)?;
-    let mut bytes = Vec::new();
-    stdout
-        .take(MAX_OUTPUT)
-        .read_to_end(&mut bytes)
-        .map_err(err)?;
     if trim {
-        Ok(String::from_utf8_lossy(&bytes)
+        Ok(String::from_utf8_lossy(&output.stdout)
             .trim_end_matches(['\r', '\n'])
             .to_string())
     } else {
-        String::from_utf8(bytes)
+        String::from_utf8(output.stdout)
             .map_err(|_| "This Git output is not UTF-8 text. Use your external Git tools.".into())
     }
 }
