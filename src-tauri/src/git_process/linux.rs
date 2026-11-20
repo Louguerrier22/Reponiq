@@ -113,7 +113,7 @@ fn supervise(control: &File, command: &mut Command) -> io::Result<Option<ExitSta
     if owner_gone(control, 0)? {
         return Ok(None);
     }
-    if !crate::workspace::is_probe(command) {
+    if !crate::workspace::is_probe(command) && !crate::catalog::is_private_clone_worker(command) {
         use_system_git_libraries(command)?;
     }
     let mut child = command.spawn()?;

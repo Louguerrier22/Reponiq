@@ -3,5 +3,6 @@ fn main() {
     #[cfg(target_os = "linux")]
     reponiq_lib::run_git_supervisor();
     reponiq_lib::run_workspace_worker();
+    reponiq_lib::run_private_clone_worker();
     reponiq_lib::run()
 }

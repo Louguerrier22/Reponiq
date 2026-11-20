@@ -555,13 +555,12 @@ async fn run_isolated<T: serde::de::DeserializeOwned + Send + 'static>(
         let executable = std::env::current_exe().map_err(err)?;
         let mut command = Command::new(executable);
         command.arg(WORKER_MODE);
-        let output =
-            super::git_process::capture_workspace(command, &payload, budget).map_err(|error| {
-                match error {
-                    super::git_process::Error::Timeout => IO_TIMEOUT,
-                    _ => "Could not complete the folder check.",
-                }
-            })?;
+        let output = super::git_process::capture_worker(command, &payload, budget, true).map_err(
+            |error| match error {
+                super::git_process::Error::Timeout => IO_TIMEOUT,
+                _ => "Could not complete the folder check.",
+            },
+        )?;
         if !output.status.success() {
             return Err("Could not complete the folder check.".into());
         }

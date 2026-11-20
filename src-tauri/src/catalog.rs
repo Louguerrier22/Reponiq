@@ -1,7 +1,12 @@
 use super::{background, err, gh_client, oauth, pulls::json_response, Repo, State};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
-use std::path::{Path, PathBuf};
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
 
 #[derive(Deserialize, Serialize, Clone)]
 pub struct OnlineRepo {
@@ -298,6 +303,16 @@ fn clone_local(
     credentials: Option<&super::git_auth::CloneAuthentication>,
 ) -> Result<NewDirectory, String> {
     let target = NewDirectory::create(parent, name)?;
+    clone_into(&target.path, target.dir(), url, credentials)?;
+    Ok(target)
+}
+
+fn clone_into(
+    path: &Path,
+    directory: &cap_std::fs::Dir,
+    url: &str,
+    credentials: Option<&super::git_auth::CloneAuthentication>,
+) -> Result<(), String> {
     let authenticated = credentials.is_some_and(super::git_auth::CloneAuthentication::uses_account);
     let mut args = vec!["clone", "--quiet"];
     if authenticated {
@@ -305,10 +320,10 @@ fn clone_local(
     }
     args.extend(["--", url, "."]);
     super::git_capture_impl(
-        &target.path,
+        path,
         &args,
         true,
-        Some(target.dir()),
+        Some(directory),
         credentials,
         false,
         None,
@@ -317,15 +332,109 @@ fn clone_local(
     // Checkout may invoke configured filters or hooks. Keep the app token
     // confined to the transport, and leave unborn or missing remote HEADs alone.
     if authenticated
-        && target
-            .git(&["rev-parse", "--verify", "--quiet", "HEAD"])
-            .is_ok()
+        && super::git_bound(
+            path,
+            directory,
+            &["rev-parse", "--verify", "--quiet", "HEAD"],
+        )
+        .is_ok()
     {
-        target.git(&["checkout", "--force"]).map_err(|error| {
+        super::git_bound(path, directory, &["checkout", "--force"]).map_err(|error| {
             format!("{error} The repository was downloaded. Check the destination before retrying.")
         })?;
     }
+    Ok(())
+}
+
+const PRIVATE_CLONE_MODE: &str = "--internal-private-clone";
+const PRIVATE_CLONE_INPUT_LIMIT: u64 = 16 * 1024;
+
+#[cfg(target_os = "linux")]
+pub(super) fn is_private_clone_worker(command: &Command) -> bool {
+    command.get_program() == "/proc/self/exe"
+        && command.get_args().next() == Some(std::ffi::OsStr::new(PRIVATE_CLONE_MODE))
+}
+
+fn clone_private(
+    parent: &str,
+    name: &str,
+    credentials: &super::git_auth::GithubCredentials,
+) -> Result<NewDirectory, String> {
+    let target = NewDirectory::create(parent, name)?;
+    let request = serde_json::to_vec(credentials).map_err(err)?;
+    if request.len() as u64 > PRIVATE_CLONE_INPUT_LIMIT {
+        return Err("The GitHub clone request is too large.".into());
+    }
+    #[cfg(target_os = "linux")]
+    let (executable, directory) = {
+        use std::os::fd::AsRawFd;
+        (
+            PathBuf::from("/proc/self/exe"),
+            PathBuf::from(format!("/proc/self/fd/{}", target.dir().as_raw_fd())),
+        )
+    };
+    #[cfg(not(target_os = "linux"))]
+    let (executable, directory) = (std::env::current_exe().map_err(err)?, target.path.clone());
+    let mut command = Command::new(executable);
+    command.arg(PRIVATE_CLONE_MODE).current_dir(directory);
+    let output = super::git_process::capture_worker(command, &request, Duration::from_secs(930), false)
+        .map_err(|_| "Could not complete the private clone. Partial files were preserved. Check the destination before retrying.")?;
+    if !output.status.success() {
+        return Err(
+            "Could not complete the private clone. Check the destination before retrying.".into(),
+        );
+    }
+    serde_json::from_slice::<Result<(), String>>(&output.stdout).map_err(|_| {
+        "Could not read the private clone result. Check the destination before retrying."
+    })??;
     Ok(target)
+}
+
+/// The desktop's private-clone worker receives the authorized request by pipe.
+/// It works in the parent-created directory and never opens desktop state.
+pub fn run_private_clone_worker() {
+    if std::env::args_os().nth(1).as_deref() != Some(std::ffi::OsStr::new(PRIVATE_CLONE_MODE)) {
+        return;
+    }
+    let result = (|| {
+        let mut payload = Vec::new();
+        std::io::stdin()
+            .take(PRIVATE_CLONE_INPUT_LIMIT + 1)
+            .read_to_end(&mut payload)
+            .map_err(err)?;
+        if payload.len() as u64 > PRIVATE_CLONE_INPUT_LIMIT {
+            return Err("The GitHub clone request is too large.".into());
+        }
+        let credentials: super::git_auth::GithubCredentials = serde_json::from_slice(&payload)
+            .map_err(|_| "Could not read the GitHub clone request.")?;
+        full_valid(&credentials.full_name)?;
+        if credentials.token.is_empty()
+            || credentials
+                .token
+                .bytes()
+                .any(|byte| byte.is_ascii_control())
+        {
+            return Err("Reconnect the selected GitHub account and try again.".into());
+        }
+
+        let path = std::env::current_dir().map_err(err)?;
+        let directory =
+            cap_std::fs::Dir::open_ambient_dir(".", cap_std::ambient_authority()).map_err(err)?;
+        if directory.entries().map_err(err)?.next().is_some() {
+            return Err(
+                "The clone folder is no longer empty. Existing files were preserved.".into(),
+            );
+        }
+        let remote = format!("https://github.com/{}.git", credentials.full_name);
+        clone_into(
+            &path,
+            &directory,
+            &remote,
+            Some(&super::git_auth::CloneAuthentication::Github(credentials)),
+        )
+    })();
+    let written = serde_json::to_writer(std::io::stdout().lock(), &result).is_ok();
+    std::process::exit(if written { 0 } else { 1 });
 }
 
 fn clone_url(url: &str) -> Result<String, String> {
@@ -467,7 +576,12 @@ pub async fn clone_repository(
     };
     background(state, move |s| {
         let _guard = super::gitflow::MUTATIONS.lock().map_err(err)?;
-        let target = clone_local(&parent, &name, &remote, Some(&credentials))?;
+        let target = match &credentials {
+            super::git_auth::CloneAuthentication::Github(credentials) => {
+                clone_private(&parent, &name, credentials)?
+            }
+            _ => clone_local(&parent, &name, &remote, Some(&credentials))?,
+        };
         target.register(s)
     })
     .await

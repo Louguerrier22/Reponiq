@@ -2,6 +2,7 @@ use std::process::Command;
 
 /// A command-local helper: never write the account token into a remote URL,
 /// command-line argument, repository config, or the system credential helper.
+#[derive(serde::Deserialize, serde::Serialize)]
 pub(super) struct GithubCredentials {
     pub token: String,
     pub full_name: String,

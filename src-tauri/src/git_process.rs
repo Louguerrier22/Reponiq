@@ -62,10 +62,11 @@ pub(super) fn capture(command: Command, stdin: Stdio, timeout: Duration) -> Resu
     capture_inner(command, stdin, None, timeout, false)
 }
 
-pub(super) fn capture_workspace(
+pub(super) fn capture_worker(
     command: Command,
     input: &[u8],
     timeout: Duration,
+    retain_worker_on_cleanup: bool,
 ) -> Result<Output, Error> {
     let (reader, writer) = io::pipe()?;
     capture_inner(
@@ -73,7 +74,7 @@ pub(super) fn capture_workspace(
         Stdio::from(reader),
         Some((writer, input.to_vec())),
         timeout,
-        true,
+        retain_worker_on_cleanup,
     )
 }
 

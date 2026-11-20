@@ -33,6 +33,8 @@ mod updater;
 mod workflow;
 mod workspace;
 #[doc(hidden)]
+pub use catalog::run_private_clone_worker;
+#[doc(hidden)]
 pub use workspace::run_workspace_worker;
 
 #[derive(Clone)]
