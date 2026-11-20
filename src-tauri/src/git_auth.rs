@@ -88,6 +88,12 @@ impl GithubCredentials {
                 "http.followRedirects=false",
                 "-c",
                 "http.https://github.com/.sslVerify=true",
+                "-c",
+                if cfg!(windows) {
+                    "core.hooksPath=NUL"
+                } else {
+                    "core.hooksPath=/dev/null"
+                },
             ])
             .env("REPONIQ_GIT_TOKEN", &self.token)
             .env("REPONIQ_GIT_PATH", format!("{}.git", self.full_name));

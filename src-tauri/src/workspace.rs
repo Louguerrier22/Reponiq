@@ -249,12 +249,23 @@ fn desktop(scan: &mut Scan, notes: &mut Vec<String>) {
         );
         return;
     };
-    let mut files = entries
-        .take(4000)
-        .filter_map(Result::ok)
-        .filter(|e| e.path().extension().is_some_and(|s| s == "log"))
-        .take(100)
-        .collect::<Vec<_>>();
+    let mut files = Vec::new();
+    for (index, entry) in entries.enumerate() {
+        if index >= 4000 || files.len() >= 100 || !scan.room() {
+            scan.limited = true;
+            break;
+        }
+        scan.entries += 1;
+        if let Ok(entry) = entry {
+            if entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "log")
+            {
+                files.push(entry);
+            }
+        }
+    }
     files.sort_by_key(|e| e.file_name());
     let mut total = 0usize;
     for entry in files.into_iter().rev().take(20) {
