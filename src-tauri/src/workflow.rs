@@ -188,13 +188,11 @@ pub(super) fn cache_status(db: &Connection, status: &super::RepoSummary) -> Resu
     {
         return Ok(());
     }
-    let dirty = i64::try_from(status.dirty).map_err(err)?;
-    let conflicts = i64::try_from(status.conflicts).map_err(err)?;
     db.execute("INSERT INTO workflow_status VALUES(?1,?2,?3,?4,?5,?6,?7)
         ON CONFLICT(repo_id) DO UPDATE SET path=excluded.path,branch=excluded.branch,dirty=excluded.dirty,
         ahead=excluded.ahead,behind=excluded.behind,conflicts=excluded.conflicts
         WHERE (path,branch,dirty,ahead,behind,conflicts)<>(excluded.path,excluded.branch,excluded.dirty,excluded.ahead,excluded.behind,excluded.conflicts)",
-        params![status.id,status.path,status.branch,dirty,status.ahead,status.behind,conflicts]).map_err(err)?;
+        params![status.id,status.path,status.branch,status.dirty,status.ahead,status.behind,status.conflicts]).map_err(err)?;
     Ok(())
 }
 
@@ -297,10 +295,8 @@ pub async fn list_repo_workflow(
         let mut result = Vec::new();
         while let Some(row) = rows.next().map_err(err)? {
             let cached_status=if let Some(branch)=row.get::<_,Option<String>>(12).map_err(err)? {
-                let dirty = usize::try_from(row.get::<_, i64>(13).map_err(err)?).map_err(err)?;
-                let conflicts = usize::try_from(row.get::<_, i64>(16).map_err(err)?).map_err(err)?;
-                Some(CachedStatus {branch,dirty,ahead:row.get(14).map_err(err)?,
-                    behind:row.get(15).map_err(err)?,conflicts})
+                Some(CachedStatus {branch,dirty:row.get(13).map_err(err)?,ahead:row.get(14).map_err(err)?,
+                    behind:row.get(15).map_err(err)?,conflicts:row.get(16).map_err(err)?})
             } else {None};
             result.push(RepoWorkflow {
                 id: row.get(0).map_err(err)?, path: row.get(1).map_err(err)?,
