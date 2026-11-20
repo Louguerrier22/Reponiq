@@ -17,6 +17,7 @@ mod create_directory;
 mod diagnostics;
 mod git_auth;
 mod git_process;
+mod git_scratch;
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
 pub use git_process::run_git_supervisor;
@@ -344,12 +345,17 @@ fn git_capture_impl(
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GCM_INTERACTIVE", "never");
+    let scratch = git_scratch::prepare(&mut command)?;
     let stdin = if let Some(bytes) = input {
         if bytes.len() > git_process::INPUT_LIMIT {
             return Err("The selected paths are too large for one Git operation. Select fewer files and try again.".into());
         }
         // Prepare the entire path list before launching a mutating Git command.
-        let mut file = tempfile::tempfile().map_err(err)?;
+        let mut file = match &scratch {
+            Some(scratch) => tempfile::tempfile_in(scratch.path()),
+            None => tempfile::tempfile(),
+        }
+        .map_err(err)?;
         file.write_all(bytes).map_err(err)?;
         file.rewind().map_err(err)?;
         Stdio::from(file)

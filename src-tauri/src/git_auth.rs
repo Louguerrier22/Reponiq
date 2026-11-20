@@ -70,8 +70,18 @@ impl GithubCredentials {
         // Authenticated transfers own their command-level configuration and
         // never write diagnostics or TLS session keys through inherited knobs.
         for name in [
+            "GIT_CONFIG",
             "GIT_CONFIG_COUNT",
             "GIT_CONFIG_PARAMETERS",
+            "GIT_CONFIG_SYSTEM",
+            "GIT_EXEC_PATH",
+            "GIT_TEMPLATE_DIR",
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_COMMON_DIR",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
             "GIT_CURL_VERBOSE",
             "GIT_SSL_NO_VERIFY",
             "SSLKEYLOGFILE",
@@ -89,6 +99,14 @@ impl GithubCredentials {
         ] {
             command.env(name, "0");
         }
+        // Only the known HTTPS transport can receive the credential. Keep a
+        // stricter inherited protocol allowlist in force.
+        let https_allowed = std::env::var_os("GIT_ALLOW_PROTOCOLS").is_none_or(|value| {
+            value
+                .to_string_lossy()
+                .split(':')
+                .any(|item| item == "https")
+        });
         command
             .args([
                 "-c",
@@ -112,6 +130,15 @@ impl GithubCredentials {
                     "core.hooksPath=/dev/null"
                 },
             ])
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
+            .env(
+                "GIT_ALLOW_PROTOCOLS",
+                if https_allowed { "https" } else { "" },
+            )
             .env("REPONIQ_GIT_TOKEN", &self.token)
             .env("REPONIQ_GIT_PATH", format!("{}.git", self.full_name));
     }
@@ -211,6 +238,13 @@ mod tests {
         assert!(!command
             .get_args()
             .any(|arg| arg.to_string_lossy().contains("fixture-secret")));
+        let options: std::collections::HashMap<_, _> = command.get_envs().collect();
+        assert_eq!(options[std::ffi::OsStr::new("GIT_EXEC_PATH")], None);
+        assert_eq!(options[std::ffi::OsStr::new("GIT_CONFIG_SYSTEM")], None);
+        assert_eq!(
+            options[std::ffi::OsStr::new("GIT_CONFIG_NOSYSTEM")],
+            Some(std::ffi::OsStr::new("1"))
+        );
         for operation in ["approve", "reject"] {
             let output = credential(operation, "protocol=https\nhost=github.com\npath=owner/project.git\nusername=x-access-token\npassword=fixture-secret\n\n");
             assert!(output.status.success());

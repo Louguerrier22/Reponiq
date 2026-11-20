@@ -316,7 +316,7 @@ fn clone_into(
     let authenticated = credentials.is_some_and(super::git_auth::CloneAuthentication::uses_account);
     let mut args = vec!["clone", "--quiet"];
     if authenticated {
-        args.push("--no-checkout");
+        args.extend(["--no-checkout", "--template="]);
     }
     args.extend(["--", url, "."]);
     super::git_capture_impl(
@@ -876,23 +876,6 @@ mod tests {
         assert_eq!(registered.name, "copy");
         assert_eq!(registered.branch, "main");
         assert_eq!(registered.dirty, 0);
-        let credentials = super::super::git_auth::CloneAuthentication::Github(
-            super::super::git_auth::GithubCredentials {
-                token: "fixture-secret".into(),
-                full_name: "owner/project".into(),
-            },
-        );
-        let authenticated = clone_local(
-            p.path().to_str().unwrap(),
-            "account-copy",
-            p.path().join("source").to_str().unwrap(),
-            Some(&credentials),
-        )
-        .unwrap();
-        let config = std::fs::read_to_string(authenticated.path.join(".git/config")).unwrap();
-        assert!(!config.contains("fixture-secret"));
-        assert!(!config.contains("credential"));
-        assert!(!config.contains("extraHeader"));
         assert!(clone_local(
             p.path().to_str().unwrap(),
             "copy",

@@ -50,3 +50,11 @@ Install 1.1 or later manually the first time if you're running a 1.0 build. On W
 Quit the app before manually installing a newer version. Keep an independent backup of the local database if needed. Uninstalling the application does not intentionally remove your local organization/history or OS credentials. Disconnect accounts in Settings before uninstalling if you want their saved tokens deleted.
 
 Existing pre-rename installations keep their original database and credential namespace. New installations use the Reponiq names. See the [data compatibility record](ARCHITECTURE.md#data-compatibility).
+## Managed Git scratch
+
+Administrators can give Reponiq a shared storage limit for its Git temporary files and any system Git tools that use the standard temporary directory. Provision a dedicated local volume with up to 1 GiB of capacity, then set `REPONIQ_GIT_SCRATCH_DIR` to an absolute path on that volume before launching Reponiq. Keep repositories on their usual storage. The setting is optional and applies to each Reponiq process that receives it.
+
+- **Windows** supports a dedicated VHDX with a small NTFS volume. Give the user's scratch folder a private ACL and allow the user to create and remove child directories. Mount the volume before the app starts.
+- **Linux** requires a tmpfs with a size limit and at most 131,072 inodes. Use a directory owned by the login running Reponiq with mode `0700`, for example a 256 MiB tmpfs with `nr_inodes=8192`.
+
+With managed scratch configured, an invalid or missing volume stops the Git operation and reports the error. A normal completion cleans up its operation directory. After a forced quit, close all Reponiq instances and confirm their Git processes have stopped before removing leftover `reponiq-git-*` directories from the dedicated volume. Git hooks and helpers can still use their own configured paths. The capacity limit applies to space in use on the managed volume, and deleting files frees space for later operations.
