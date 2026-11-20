@@ -3137,6 +3137,7 @@ dependencies = [
  "cap-std",
  "chrono",
  "keyring",
+ "libc",
  "log",
  "regex",
  "reqwest 0.12.28",
