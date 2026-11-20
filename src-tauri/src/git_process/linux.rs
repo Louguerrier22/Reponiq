@@ -1,13 +1,15 @@
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::File;
 #[cfg(not(test))]
 use std::io::PipeWriter;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileTypeExt;
 #[cfg(not(test))]
 use std::os::unix::process::CommandExt;
 use std::os::unix::process::ExitStatusExt;
+use std::path::Path;
 use std::process::{Command, ExitStatus};
 use std::time::Duration;
 
@@ -111,6 +113,7 @@ fn supervise(control: &File, command: &mut Command) -> io::Result<Option<ExitSta
     if owner_gone(control, 0)? {
         return Ok(None);
     }
+    use_system_git_libraries(command)?;
     let mut child = command.spawn()?;
     let result = (|| loop {
         if let Some(status) = child.try_wait()? {
@@ -122,6 +125,46 @@ fn supervise(control: &File, command: &mut Command) -> io::Result<Option<ExitSta
     })();
     reap_git_tree(children)?;
     result
+}
+
+fn use_system_git_libraries(command: &mut Command) -> io::Result<()> {
+    let (Some(_), Some(bundle), Some(paths)) = (
+        std::env::var_os("APPIMAGE"),
+        std::env::var_os("APPDIR"),
+        std::env::var_os("LD_LIBRARY_PATH"),
+    ) else {
+        return Ok(());
+    };
+    let bundle = Path::new(&bundle);
+    if !bundle.is_absolute() {
+        return Ok(());
+    }
+    // The supervisor needs AppImage libraries during exec. System Git and its
+    // helpers need the distribution's matching libraries.
+    match host_library_paths(bundle, &paths)? {
+        Some(paths) => {
+            command.env("LD_LIBRARY_PATH", paths);
+        }
+        None => {
+            command.env_remove("LD_LIBRARY_PATH");
+        }
+    }
+    Ok(())
+}
+
+fn host_library_paths(bundle: &Path, paths: &OsStr) -> io::Result<Option<OsString>> {
+    let host: Vec<_> = paths
+        .as_bytes()
+        .split(|byte| *byte == b':' || *byte == b';')
+        .map(|part| Path::new(OsStr::from_bytes(part)))
+        .filter(|part| part.is_absolute() && !part.starts_with(bundle))
+        .collect();
+    if host.is_empty() {
+        return Ok(None);
+    }
+    std::env::join_paths(host)
+        .map(Some)
+        .map_err(io::Error::other)
 }
 
 fn require_local_procfs() -> io::Result<()> {
@@ -185,5 +228,24 @@ fn reap_git_tree(mut children_file: File) -> io::Result<()> {
             }
         }
         std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_git_keeps_host_library_paths_and_drops_packaged_ones() {
+        let bundle = Path::new("/tmp/mounted AppImage");
+        let mixed = OsStr::new("/tmp/mounted AppImage/usr/lib;:/usr/local/lib:relative:/usr/lib");
+        assert_eq!(
+            host_library_paths(bundle, mixed).unwrap().as_deref(),
+            Some(OsStr::new("/usr/local/lib:/usr/lib"))
+        );
+        assert_eq!(
+            host_library_paths(bundle, OsStr::new("/tmp/mounted AppImage/usr/lib:")).unwrap(),
+            None
+        );
     }
 }
