@@ -7,11 +7,10 @@ const BUSY: &str = "Reponiq is already working with a GitHub account. Try again 
 const UNAVAILABLE: &str = "Could not open Reponiq’s GitHub account lock. Check your user folder permissions and try again.";
 
 pub(crate) async fn lock_account() -> Result<File, String> {
-    let file =
-        tokio::task::spawn_blocking(|| open(&lock_directory()?.join(".reponiq-credentials.lock")))
-            .await
-            .map_err(|_| UNAVAILABLE.to_string())?
-            .map_err(|_| UNAVAILABLE.to_string())?;
+    let file = tokio::task::spawn_blocking(open_for_login)
+        .await
+        .map_err(|_| UNAVAILABLE.to_string())?
+        .map_err(|_| UNAVAILABLE.to_string())?;
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match file.try_lock() {
@@ -25,6 +24,22 @@ pub(crate) async fn lock_account() -> Result<File, String> {
     })
     .await
     .map_err(|_| BUSY.to_string())?
+}
+
+fn open_for_login() -> io::Result<File> {
+    let home = lock_directory()?;
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        let directory =
+            crate::repository_identity::open_directory(&home).map_err(io::Error::other)?;
+        return open(
+            &PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()))
+                .join(".reponiq-credentials.lock"),
+        );
+    }
+    #[cfg(not(target_os = "linux"))]
+    open(&home.join(".reponiq-credentials.lock"))
 }
 
 fn open(path: &Path) -> io::Result<File> {

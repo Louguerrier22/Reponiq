@@ -2,7 +2,7 @@ use std::ffi::OsStr;
 use std::fs::File;
 #[cfg(not(test))]
 use std::io::PipeWriter;
-use std::io::{self, Read};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::fs::FileTypeExt;
 #[cfg(not(test))]
@@ -17,7 +17,7 @@ const CHILDREN: &str = "/proc/thread-self/children";
 #[cfg(not(test))]
 pub(super) fn wrap(command: Command) -> io::Result<(Command, Option<PipeWriter>)> {
     let (reader, owner) = io::pipe()?;
-    let mut supervisor = Command::new(std::env::current_exe()?);
+    let mut supervisor = Command::new("/proc/self/exe");
     supervisor
         .arg(SUPERVISE)
         .arg(reader.as_raw_fd().to_string())
@@ -89,7 +89,8 @@ fn set_close_on_exec(fd: RawFd, enabled: bool) -> io::Result<()> {
 fn supervise(control: &File, command: &mut Command) -> io::Result<Option<ExitStatus>> {
     // A supervisor reaps orphaned Git descendants regardless of their process
     // group. The application holds the only writer of the control pipe.
-    File::open(CHILDREN)?;
+    require_local_procfs()?;
+    let children = File::open(CHILDREN)?;
     let unused: libc::c_ulong = 0;
     let enable: libc::c_ulong = 1;
     if unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, enable, unused, unused, unused) } != 0 {
@@ -119,8 +120,24 @@ fn supervise(control: &File, command: &mut Command) -> io::Result<Option<ExitSta
             return Ok(None);
         }
     })();
-    reap_git_tree()?;
+    reap_git_tree(children)?;
     result
+}
+
+fn require_local_procfs() -> io::Result<()> {
+    let status = std::fs::read_to_string("/proc/thread-self/status")?;
+    let mut ids = status
+        .lines()
+        .find_map(|line| line.strip_prefix("NSpid:"))
+        .unwrap_or_default()
+        .split_ascii_whitespace();
+    let tid = unsafe { libc::gettid() };
+    if ids.next().and_then(|id| id.parse().ok()) != Some(tid) || ids.next().is_some() {
+        return Err(io::Error::other(
+            "Linux procfs must match the Git supervisor's PID namespace",
+        ));
+    }
+    Ok(())
 }
 
 fn owner_gone(control: &File, timeout: i32) -> io::Result<bool> {
@@ -136,7 +153,7 @@ fn owner_gone(control: &File, timeout: i32) -> io::Result<bool> {
     Ok(result > 0)
 }
 
-fn reap_git_tree() -> io::Result<()> {
+fn reap_git_tree(mut children_file: File) -> io::Result<()> {
     const CHILD_LIST_LIMIT: usize = 64 * 1024;
     loop {
         let result = unsafe { libc::waitpid(-1, std::ptr::null_mut(), libc::WNOHANG) };
@@ -152,7 +169,8 @@ fn reap_git_tree() -> io::Result<()> {
         // kernel reassigns their children here as they exit. A concurrent exit
         // can hide entries from procfs, so only waitpid proves cleanup is done.
         let mut children = String::new();
-        File::open(CHILDREN)?
+        children_file.seek(SeekFrom::Start(0))?;
+        (&mut children_file)
             .take(CHILD_LIST_LIMIT as u64)
             .read_to_string(&mut children)?;
         if children.len() == CHILD_LIST_LIMIT {

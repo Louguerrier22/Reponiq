@@ -468,7 +468,11 @@ pub async fn create_repository(
 ) -> Result<Created, String> {
     let _update = super::updater::workspace_job()?;
     name_valid(&input.name)?;
-    let _account_guard = oauth::lock_account().await?;
+    let _account_guard = if input.account_id.is_some() {
+        Some(oauth::lock_account().await?)
+    } else {
+        None
+    };
     let remote = if let Some(id) = input.account_id {
         let api = api(id, state.clone()).await?;
         let user = api.user().await?;
