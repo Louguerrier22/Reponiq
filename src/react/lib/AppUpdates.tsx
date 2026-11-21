@@ -18,7 +18,7 @@ const UpdatesContext = createContext({ ready: false, open: () => {} });
 export function AppUpdateButton() {
   const { ready, open } = useContext(UpdatesContext);
   const label = ready ? "Update ready" : "App updates";
-  return <Button title={label} onClick={open} className={cn("app-updates", ready && "update-ready")}><ArrowDownToLine size={17}/><span>{label}</span></Button>;
+  return <Button data-tour="updates" title={label} onClick={open} className={cn("app-updates", ready && "update-ready")}><ArrowDownToLine size={17}/><span>{label}</span></Button>;
 }
 
 type BaseProps = {

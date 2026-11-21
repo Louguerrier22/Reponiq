@@ -1538,6 +1538,7 @@ pub fn run() {
             registry_theme::preview_registry_theme,
             launch_settings::fetch_settings,
             launch_settings::save_fetch_settings,
+            launch_settings::save_repo_fetch_mode,
             launch_settings::launch_fetch,
             launch_settings::autostart_status,
             launch_settings::set_autostart,

@@ -46,12 +46,7 @@ import { cn } from "./utils";
 export { Badge, Label, SidebarTrigger, Switch, TabsTrigger };
 const Badge = ShadcnBadge;
 export const Tabs = { Root: TabsRoot, Content: TabsContent };
-export function TabsList({
-  className,
-  ...props
-}: ComponentProps<typeof ShadcnTabsList>) {
-  return <ShadcnTabsList className={cn("tabs", className)} {...props} />;
-}
+export const TabsList = ShadcnTabsList;
 
 type ButtonProps = Omit<ComponentProps<typeof ShadcnButton>, "variant"> & {
   variant?: "default" | "primary" | "secondary" | "ghost" | "destructive";
