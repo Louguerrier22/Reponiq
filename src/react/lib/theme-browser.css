@@ -111,7 +111,13 @@
   color: var(--diff-add-foreground);
 }
 
+/* The theme browser can open above the setup dialog (z-index: 51). */
+.theme-browser-overlay[data-slot="dialog-overlay"] {
+  z-index: 52;
+}
+
 .theme-browser[data-slot="dialog-content"] {
+  z-index: 53;
   width: min(860px, calc(100% - 32px));
   max-width: none;
   max-height: calc(100dvh - 32px);

@@ -277,6 +277,7 @@ function ThemeBrowser({
   return (
     <DialogContent
       className="theme-browser"
+      overlayClassName="theme-browser-overlay"
       onEscapeKeyDown={(event) => {
         if (saving) event.preventDefault();
       }}
