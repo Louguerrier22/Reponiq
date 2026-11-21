@@ -1,5 +1,4 @@
 import {
-  ArrowDownToLine,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -9,6 +8,8 @@ import {
   Search,
 } from "lucide-react";
 import {
+  useCallback,
+  useEffect,
   useId,
   useRef,
   useState,
@@ -18,12 +19,15 @@ import {
 import { api } from "../../lib/api";
 import {
   defaultTheme,
+  registryVariables,
   themeAttributes,
   themeVariables,
   type RegistryTheme,
   type Theme,
 } from "../../lib/appearance";
 import { Badge } from "../shadcn/badge";
+import { Button as SampleButton } from "../shadcn/button";
+import { Card } from "../shadcn/card";
 import {
   Dialog,
   DialogContent,
@@ -51,6 +55,11 @@ const modes = [
   { value: "dark", label: "Dark" },
   { value: "system", label: "System" },
 ];
+const sampleDefaults = Object.fromEntries(
+  registryVariables
+    .filter((key) => key.startsWith("--registry-"))
+    .map((key) => [key, "initial"]),
+);
 
 function ThemePreview({
   theme,
@@ -61,27 +70,40 @@ function ThemePreview({
       aria-label="Theme preview"
       className="theme-sample"
       {...themeAttributes(theme, systemDark)}
-      style={themeVariables(theme, systemDark) as CSSProperties}
+      style={{
+        ...sampleDefaults,
+        ...themeVariables(theme, systemDark),
+      } as CSSProperties}
     >
       <div aria-hidden="true" className="theme-sample-header">
         <GitBranch size={16} /> <strong>main</strong>
-        <span className="theme-sample-action">Fetch</span>
+        <div className="theme-sample-actions">
+          <SampleButton asChild size="xs" variant="secondary">
+            <span>Branches</span>
+          </SampleButton>
+          <SampleButton asChild size="xs">
+            <span>Fetch</span>
+          </SampleButton>
+        </div>
       </div>
       <div aria-hidden="true" className="theme-sample-workspace">
         <div className="theme-sample-nav">
           <b>Changes</b>
           <span>History</span>
-          <span>Branches</span>
+          <span>Stashes</span>
         </div>
-        <div className="theme-sample-file">
-          <span>
-            <FileCode size={16} /> README.md <Check size={15} />
-          </span>
+        <Card className="theme-sample-file">
+          <div className="theme-sample-file-header">
+            <FileCode size={16} /> <strong>README.md</strong>
+            <Badge variant="secondary">
+              <Check size={12} /> Modified
+            </Badge>
+          </div>
           <code>
             <del>− Update notes</del>
             <ins>+ Update release notes</ins>
           </code>
-        </div>
+        </Card>
       </div>
     </section>
   );
@@ -133,7 +155,9 @@ function ThemeBrowser({
     sameTheme(theme, { ...defaultTheme, mode: theme.mode }) ? bundled : null,
   );
   const [mode, setMode] = useState(theme.mode);
-  const [downloads, setDownloads] = useState<Record<string, RegistryTheme>>({});
+  const [catalogPreviews, setCatalogPreviews] = useState<
+    Record<string, { theme: RegistryTheme } | { error: string }>
+  >({});
   const [imported, setImported] = useState<{
     url: string;
     theme: RegistryTheme;
@@ -161,21 +185,22 @@ function ThemeBrowser({
   const visible = filtered.slice(page * pageSize, (page + 1) * pageSize);
   const selected = themeCatalog.find((entry) => entry.url === selection);
   const importedSelected = imported?.url === selection ? imported : undefined;
-  const downloaded = selected
-    ? downloads[selected.url]
-    : importedSelected?.theme;
+  const selectedResult = selected && catalogPreviews[selected.url];
+  const externalPreview =
+    selectedResult && "theme" in selectedResult
+      ? selectedResult.theme
+      : importedSelected?.theme;
   const preview =
     selection === null
       ? { ...theme, mode }
       : selection === bundled
         ? { ...defaultTheme, mode }
-        : downloaded && { ...defaultTheme, mode, imported: downloaded };
+        : externalPreview && { ...defaultTheme, mode, imported: externalPreview };
   const displayMode =
     mode === "system" ? (systemDark ? "dark" : "light") : mode;
   const name = selected?.name ?? themeName(preview ?? theme);
   const external = Boolean(selected || importedSelected || preview?.imported);
   const source = selected?.source ?? (external ? "Theme link" : "");
-  const loadingSelected = pending === selection;
   const changed = preview && !sameTheme(preview, theme);
 
   function goToPage(next: number) {
@@ -183,16 +208,15 @@ function ThemeBrowser({
     catalogScroll.current?.scrollTo({ top: 0 });
   }
 
-  async function download(address: string, item?: ThemeCatalogItem) {
-    if (pending || saving) return;
+  const loadPreview = useCallback(async (address: string, item?: ThemeCatalogItem) => {
     setProblem(undefined);
     setPending(address);
     try {
       const result = validatePreview(await api.previewRegistryTheme(address));
       if (item) {
-        setDownloads((previous) => ({
+        setCatalogPreviews((previous) => ({
           ...previous,
-          [item.url]: { ...result, name: item.name },
+          [item.url]: { theme: { ...result, name: item.name } },
         }));
       } else {
         setImported({ url: address, theme: result });
@@ -200,14 +224,25 @@ function ThemeBrowser({
         setShowImport(false);
       }
     } catch (error) {
-      setProblem({
-        selection: item ? address : null,
-        message: error instanceof Error ? error.message : String(error),
-      });
+      const message = error instanceof Error ? error.message : String(error);
+      if (item) {
+        setCatalogPreviews((previous) => ({
+          ...previous,
+          [item.url]: { error: message },
+        }));
+      } else {
+        setProblem({ selection: null, message });
+      }
     } finally {
       setPending(undefined);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    if (selected && !selectedResult && !pending && !saving) {
+      void loadPreview(selected.url, selected);
+    }
+  }, [selected, selectedResult, pending, saving, loadPreview]);
 
   async function applyTheme() {
     if (!preview || saving || pending) return;
@@ -229,20 +264,20 @@ function ThemeBrowser({
   function submitLink(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const address = url.trim();
-    if (!address) return;
+    if (!address || pending || saving) return;
     const item = themeCatalog.find((entry) => entry.url === address);
     if (item) {
       setSelection(item.url);
       setShowImport(false);
-      if (!downloads[item.url]) void download(item.url, item);
       return;
     }
-    void download(address);
+    void loadPreview(address);
   }
 
   return (
     <DialogContent
       className="theme-browser"
+      overlayClassName="theme-browser-overlay"
       onEscapeKeyDown={(event) => {
         if (saving) event.preventDefault();
       }}
@@ -309,7 +344,7 @@ function ThemeBrowser({
             variant="secondary"
             disabled={!url.trim() || Boolean(pending)}
           >
-            {pending ? "Downloading…" : "Download theme"}
+            {pending === url.trim() ? "Loading…" : "Preview theme"}
           </Button>
           {problem?.selection === null && (
             <p role="alert" className="connection-error">
@@ -335,9 +370,10 @@ function ThemeBrowser({
                       <Button
                         variant="ghost"
                         aria-pressed={selection === entry.url}
-                        disabled={saving}
+                        disabled={saving || (showImport && Boolean(pending))}
                         onClick={() => {
                           setSelection(entry.url);
+                          setShowImport(false);
                           setProblem(undefined);
                         }}
                       >
@@ -405,22 +441,23 @@ function ThemeBrowser({
           </fieldset>
           {preview ? (
             <ThemePreview theme={preview} systemDark={systemDark} />
-          ) : (
-            selected && (
-              <div
-                className="theme-palette-preview"
-                aria-label="Palette preview"
+          ) : selected && selectedResult && "error" in selectedResult && pending !== selection ? (
+            <div className="theme-preview-status">
+              <p role="alert" className="connection-error">
+                {selectedResult.error}
+              </p>
+              <Button
+                variant="secondary"
+                disabled={Boolean(pending)}
+                onClick={() => void loadPreview(selected.url, selected)}
               >
-                {selected.swatches[displayMode].map((color, index) => (
-                  <i key={index} style={{ backgroundColor: color }} />
-                ))}
-                <p>
-                  {loadingSelected
-                    ? "Downloading theme…"
-                    : "Download to preview in the app."}
-                </p>
-              </div>
-            )
+                Retry preview
+              </Button>
+            </div>
+          ) : (
+            <p role="status" className="theme-preview-status">
+              Loading preview…
+            </p>
           )}
           {problem && problem.selection === selection && !showImport && (
             <p role="alert" className="connection-error">
@@ -430,24 +467,13 @@ function ThemeBrowser({
         </section>
       </div>
       <div className="theme-browser-footer">
-        {selected && !downloaded ? (
-          <Button
-            variant="primary"
-            disabled={Boolean(pending)}
-            onClick={() => void download(selected.url, selected)}
-          >
-            <ArrowDownToLine size={16} />{" "}
-            {loadingSelected ? "Downloading…" : "Download theme"}
-          </Button>
-        ) : (
-          <Button
-            variant="primary"
-            disabled={!changed || saving || Boolean(pending)}
-            onClick={() => void applyTheme()}
-          >
-            {saving ? "Applying…" : changed ? "Apply theme" : "Active theme"}
-          </Button>
-        )}
+        <Button
+          variant="primary"
+          disabled={!changed || saving || Boolean(pending)}
+          onClick={() => void applyTheme()}
+        >
+          {saving ? "Applying…" : preview && !changed ? "Active theme" : "Apply theme"}
+        </Button>
       </div>
     </DialogContent>
   );
