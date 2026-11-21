@@ -12,7 +12,7 @@ A native desktop Git workspace for Windows and Linux. Organize projects, review 
 
 ![Reponiq project shelf](docs/reponiq-shelf.png)
 
-*Captured from Reponiq 1.0 with a disposable example repository. No generated UI artwork.*
+*Reponiq 1.2 interface with example repositories. The 1.2 release is in qualification; the Download link points to the latest public version.*
 
 ## Download
 
@@ -25,7 +25,7 @@ A native desktop Git workspace for Windows and Linux. Organize projects, review 
 
 Download your installer and its checksum file from the [latest release](https://github.com/Louguerrier22/Reponiq/releases/latest).
 
-Install [Git](https://git-scm.com/downloads) first. See [installation and checksum verification](docs/INSTALLATION.md) for prerequisites. Reponiq 1.1 prepares signed updates on Windows and for Linux AppImage builds. Availability and tested limits are recorded in [release verification](docs/RELEASE_CHECKLIST.md).
+Install [Git](https://git-scm.com/downloads) first. See [installation and checksum verification](docs/INSTALLATION.md) for prerequisites. Reponiq 1.1 and later prepare signed updates on Windows and for Linux AppImage builds. Availability and tested limits are recorded in [release verification](docs/RELEASE_CHECKLIST.md).
 
 ## A calmer Git workflow
 
@@ -38,6 +38,8 @@ Install [Git](https://git-scm.com/downloads) first. See [installation and checks
 **Work with pull requests.** Connect GitHub in your browser. Compare a published branch before opening a PR. Read patches, check the results, submit a review and merge when GitHub allows it.
 
 First-run setup takes you through appearance, your workspace, optional GitHub connection, startup, and review. Under **Settings → General → Startup**, choose a default fetch scope and use the repository checklist to make exceptions. Each repository also has a **Fetch on launch** switch. The workspace-wide **Fetch on launch** setting enables automatic fetching. Manage connections from **Settings → GitHub accounts** and replay the walkthrough from **Settings → General**. Import local repositories from GitHub Desktop history, VS Code recent folders, or any Git client's repository folder and review the matches before adding them.
+
+[See the repository workbench, theme browser, and startup settings](docs/USER_GUIDE.md).
 
 ## Supported platforms
 
@@ -63,7 +65,7 @@ No Reponiq cloud account, telemetry or hosted backend. Organization and activity
 
 ## Built with
 
-![Rust](https://img.shields.io/badge/Rust-native_core-777?style=flat-square) ![Tauri 2](https://img.shields.io/badge/Tauri-2-777?style=flat-square) ![Svelte 5](https://img.shields.io/badge/Svelte-5-777?style=flat-square) ![TypeScript](https://img.shields.io/badge/TypeScript-interface-777?style=flat-square) ![SQLite](https://img.shields.io/badge/SQLite-local_data-777?style=flat-square) ![Git](https://img.shields.io/badge/Git-system_installation-777?style=flat-square)
+![Rust](https://img.shields.io/badge/Rust-native_core-777?style=flat-square) ![Tauri 2](https://img.shields.io/badge/Tauri-2-777?style=flat-square) ![React](https://img.shields.io/badge/React-UI-777?style=flat-square) ![shadcn/ui](https://img.shields.io/badge/shadcn%2Fui-components-777?style=flat-square) ![TypeScript](https://img.shields.io/badge/TypeScript-interface-777?style=flat-square) ![SQLite](https://img.shields.io/badge/SQLite-local_data-777?style=flat-square) ![Git](https://img.shields.io/badge/Git-system_installation-777?style=flat-square)
 
 Tauri uses the operating system's webview. Git is a separate installed prerequisite. Node.js and Rust are needed to build from source, not to run an installed package.
 

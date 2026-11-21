@@ -225,7 +225,9 @@ export function ToggleGroup({
     <ShadcnToggleGroup
       type="single"
       aria-label={label}
-      className={cn("ui-toggle-group", className)}
+      size="sm"
+      spacing={1}
+      className={cn("flex-wrap", className)}
       value={value}
       disabled={disabled}
       onValueChange={(next) => {
@@ -238,6 +240,7 @@ export function ToggleGroup({
           value={option.value}
           aria-label={option.label}
           title={option.label}
+          className="text-muted-foreground data-[state=on]:bg-primary/15 data-[state=on]:text-primary"
         >
           {item ? item(option) : option.label}
         </ToggleGroupItem>

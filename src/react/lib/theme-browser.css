@@ -178,8 +178,7 @@
 
 .theme-browser-catalog,
 .theme-browser-preview {
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: var(--card);
   min-width: 0;
 }
@@ -215,18 +214,11 @@
   min-width: 0;
   padding: 7px;
   text-align: left;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--background);
+  border-radius: var(--radius);
 }
 
-.theme-browser-tiles button:hover {
-  background: var(--muted);
-}
 .theme-browser-tiles button[aria-pressed="true"] {
-  border-color: var(--ring);
-  background: color-mix(in srgb, var(--primary) 10%, var(--background));
-  box-shadow: inset 0 0 0 1px var(--ring);
+  background: color-mix(in srgb, var(--primary) 12%, var(--card));
 }
 
 .theme-tile-swatches {

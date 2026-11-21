@@ -11,7 +11,7 @@ useController,
 type Lifecycle
 } from "../controller";
 import { Checkbox } from "../shadcn/checkbox";
-import { Popover, PopoverContent, PopoverTrigger } from "../shadcn/popover";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../shadcn/collapsible";
 import { Button,Field,Label,NativeSelect,Switch } from "../ui";
 import { cn } from "../utils";
 type FetchRepo = Repo & { fetch_mode?: Override };
@@ -200,22 +200,18 @@ function createView(lifecycle: Lifecycle<Props>) {
                   <SelectOption value={"selected"}>Selected repositories only</SelectOption>
                 </NativeSelect>
               </Field>
-              <Popover>
-                <PopoverTrigger asChild>
+              <Collapsible>
+                <CollapsibleTrigger asChild>
                   <Button
-                    variant="secondary"
-                    className="justify-between"
+                    variant="ghost"
+                    className="w-full justify-between"
                     disabled={busy.value || !settings.enabled || !reposReady}
                   >
                     Repositories to fetch ({included}/{repos.length})
                     <ChevronDown aria-hidden="true" />
                   </Button>
-                </PopoverTrigger>
-                <PopoverContent
-                  align="start"
-                  aria-label="Repositories to fetch"
-                  className="startup-fetch-popover"
-                >
+                </CollapsibleTrigger>
+                <CollapsibleContent className="startup-fetch-checklist">
                   {repos.length ? repos.map((repo) => {
                     const key = repoKey(repo);
                     const id = fetchScopeId + "-repo-" + repo.id;
@@ -233,8 +229,8 @@ function createView(lifecycle: Lifecycle<Props>) {
                       </Label>
                     );
                   }) : <p>No repositories in your workspace yet.</p>}
-                </PopoverContent>
-              </Popover>
+                </CollapsibleContent>
+              </Collapsible>
             </>
           ) : null}
           <Label className={cn("scope-choice")}>

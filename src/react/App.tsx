@@ -2066,7 +2066,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                           </div>
                           <div className="repo-command-bar" role="group" aria-label="Repository controls">
                             <ShadcnButton
-                              variant="outline"
+                              variant="ghost"
                               size="icon"
                               aria-label={
                                 currentRepo.pinned
@@ -3750,7 +3750,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                           (shelfLayout.value =
                                             value as typeof shelfLayout.value)
                                         }
-                                        className={cn("shelf-layout")}
+                                        className="shrink-0 flex-nowrap [&>button]:size-8 [&>button]:p-0"
                                         item={(option) => (
                                           <>
                                             {option.value === "grid" ? (
