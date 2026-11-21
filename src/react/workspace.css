@@ -75,9 +75,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.shelf-layout button[data-state="on"] {
-  background: color-mix(in srgb, var(--primary) 22%, var(--card));
-}
 .repository-card .card-heading .card-open {
   justify-content: flex-start;
 }

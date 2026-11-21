@@ -367,7 +367,7 @@ function ThemeBrowser({
                       : ["#f2eef7", "#faf8ff", "#59448f"];
                   return (
                     <li key={entry.url}>
-                      <Button
+                      <SampleButton
                         variant="ghost"
                         aria-pressed={selection === entry.url}
                         disabled={saving || (showImport && Boolean(pending))}
@@ -393,7 +393,7 @@ function ThemeBrowser({
                               : "In app"}
                           </small>
                         </span>
-                      </Button>
+                      </SampleButton>
                     </li>
                   );
                 })}

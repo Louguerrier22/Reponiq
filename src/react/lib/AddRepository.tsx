@@ -28,6 +28,7 @@ useController,
 type Lifecycle
 } from "../controller";
 import { Button,Input,Label,NativeSelect,Tabs,TabsList,TabsTrigger } from "../ui";
+import { Button as ShadcnButton } from "../shadcn/button";
 import { cn } from "../utils";
 import Modal from "./Modal";
 import PlatformIcon from "./PlatformIcon";
@@ -289,34 +290,25 @@ function createView(lifecycle: Lifecycle<Props>) {
         ) : null}
         {mode.value === "choose" ? (
           <>
-            <div className={cn("add-choices")}>
-              <Button onClick={() => choose("create")}>
-                <span>
-                  <Plus size={23} />
-                </span>
-                <div>
-                  <strong>{"Create"}</strong>
-                  <small>{"Start a new repository."}</small>
-                </div>
-              </Button>
-              <Button onClick={() => choose("folder")}>
-                <span>
-                  <FolderOpen size={23} />
-                </span>
-                <div>
-                  <strong>{"Add from folder"}</strong>
-                  <small>{"Open an existing local repository."}</small>
-                </div>
-              </Button>
-              <Button onClick={() => choose("clone")}>
-                <span>
-                  <Download size={23} />
-                </span>
-                <div>
-                  <strong>{"Clone"}</strong>
-                  <small>{"Download a repository from online."}</small>
-                </div>
-              </Button>
+            <div className="grid gap-1">
+              {([
+                { mode: "create", icon: Plus, label: "Create", description: "Start a new repository." },
+                { mode: "folder", icon: FolderOpen, label: "Add from folder", description: "Open an existing local repository." },
+                { mode: "clone", icon: Download, label: "Clone", description: "Download a repository from online." },
+              ] as const).map(({ mode, icon: Icon, label, description }) => (
+                <ShadcnButton
+                  key={mode}
+                  variant="ghost"
+                  className="h-auto w-full justify-start gap-3 whitespace-normal px-3 py-3 text-left"
+                  onClick={() => choose(mode)}
+                >
+                  <Icon aria-hidden="true" className="text-primary" />
+                  <span className="grid min-w-0 gap-1">
+                    <span>{label}</span>
+                    <small className="text-xs font-normal text-muted-foreground">{description}</small>
+                  </span>
+                </ShadcnButton>
+              ))}
             </div>
           </>
         ) : (

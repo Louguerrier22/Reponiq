@@ -1,6 +1,12 @@
 # Release verification
 
-[Documentation](README.md) · [Installation](INSTALLATION.md) · [Reponiq v1](https://github.com/Louguerrier22/Reponiq/releases/tag/v1.0.1)
+[Documentation](README.md) · [Installation](INSTALLATION.md) · [Latest public release](https://github.com/Louguerrier22/Reponiq/releases/latest)
+
+## Current release workflow
+
+CI checks React, TypeScript and the native backend. It packages Windows NSIS and Linux AppImage, DEB and RPM. Verify the reviewed source, hosted checksums, and updater signatures for NSIS and AppImage before testing the exact packages. Record Windows and Linux runtime checks, including setup resume, update restart, full quit, and recovery. Publish only after candidate-bound security and release checks pass.
+
+## Historical verification for 1.0.1
 
 Reponiq 1.0.1 is the follow-up to the consolidated v1 baseline, identified by tag v1.0.1. The release notes link the exact packaging run and source identity. SHA256SUMS.txt on that same release identifies the distributed Windows EXE and Linux deb/rpm/AppImage files. The published v1.0.0 baseline remains available.
 
@@ -24,4 +30,4 @@ Publication requires the full audit for this exact source and installer digests,
 
 PR interaction tests use synthetic provider fixtures and bounded HTTP fixtures; they do not write to real user repositories. GitHub remains authoritative for account permissions, organization policy and branch protection. A real-user credential refresh/expiry lifecycle, full installed-package qualification, broad Linux distribution testing and independent accessibility certification are not claimed.
 
-Installers are unsigned. Checksums verify integrity, not publisher certification. No automatic updater is included. The update keeps the same SQLite tables, preference keys and credential format as v1.0.0. Reader/writer preservation tests retain unknown data and current records. Runtime status_pending and per-import failures are additive IPC fields; matched UI/native packages ship together. Experimental pre-v1 builds have no supported coexistence contract.
+The 1.0.1 installers shipped with checksums and lacked an automatic updater. The update kept the same SQLite tables, preference keys and credential format as v1.0.0. Reader/writer preservation tests retain unknown data and current records. Runtime status_pending and per-import failures are additive IPC fields; matched UI/native packages ship together. Experimental pre-v1 builds have no supported coexistence contract.

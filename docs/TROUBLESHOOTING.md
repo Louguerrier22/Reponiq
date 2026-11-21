@@ -8,7 +8,7 @@ Use the updated AppImage. Its bundled Fontconfig uses an app-specific cache (`re
 
 ## Inspect live logs
 
-Open **Settings > Live logs**, below **A quick tour**. Reproduce the problem, filter to Errors or search for the relevant command, and inspect the Git diagnostic or stack details. Pause the view when needed. Copy logs or download the visible entries through the save dialog. Review paths and private details before sharing. Recent logs survive restart; the viewer shows their local file path.
+Open **Settings → General → Live logs**, below **A quick tour**. Reproduce the problem, filter to Errors or search for the relevant command, and inspect the Git diagnostic or stack details. Pause the view when needed. Copy logs or download the visible entries through the save dialog. Review paths and private details before sharing. Recent logs survive restart; the viewer shows their local file path.
 
 ## Git is unavailable
 
@@ -38,7 +38,7 @@ Refresh it. New commits, failing/pending checks, incomplete status, draft state,
 
 ## Find the walkthrough again
 
-Open Settings, scroll to A quick tour, and choose Open walkthrough. Skipping or completing it is saved locally.
+Open **Settings → General** and choose **Open walkthrough** under **A quick tour**. Skipping or completing it is saved locally.
 
 ## Report a problem safely
 
@@ -49,6 +49,6 @@ If GitHub shows a branch that Reponiq does not list, open the branch picker, sel
 
 If switching fails after stashing, close the branch picker and open **Saved changes** on the original branch. If restoring reports conflicts, review the partially restored files in **Changes**. Use **Save & stage** to resolve each conflict, then commit the restored edits you want to keep. The recovery copy stays in **Saved changes** and in `git stash list`.
 
-If **Fetch on launch** fails, verify network access and system Git credentials, then use **Retry fetch**. Repositories configured to fetch into local branches or tags require explicit manual Fetch. If sign-in startup is unavailable, check OS startup permissions and open the installed app or the original AppImage. Before rolling back to an older build, disable **Start Reponiq at sign-in** in Settings or remove the Reponiq entry using your OS startup settings. The older app can read and write its existing settings while the newer fetch preferences remain saved.
+Check the global switch and **Repositories to fetch** under **Settings → General → Startup**. If a selected repository fails to fetch, verify network access and system Git credentials, then use **Retry fetch**. Repositories configured to fetch into local branches or tags require explicit manual Fetch. If sign-in startup is unavailable, check OS startup permissions and open the installed app or the original AppImage. Before rolling back to an older build, disable **Start Reponiq at sign-in** in Settings or remove the Reponiq entry using your OS startup settings. The older app can read and write its existing settings while the newer fetch preferences remain saved.
 
 Use a repo's **Manual only** override if the remote needs a VPN or an interactive credential prompt. If Undo cannot verify publication, fetch explicitly or use Revert for shared history. If **Locate folder** reports a different remote, review the folder and add it as a separate repo. A saved editor that moved or was uninstalled can be replaced in Settings.
