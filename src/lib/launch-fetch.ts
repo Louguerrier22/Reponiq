@@ -1,12 +1,18 @@
 import type { FetchSettings, Override, Repo } from './api';
 
+type FetchRepo = Pick<Repo, 'id' | 'pinned'> & {fetch_mode?: Override};
+
+export function repoFetchEnabled(repo: FetchRepo, scope: FetchSettings['scope']) {
+  return repo.fetch_mode === 'on' ||
+    (repo.fetch_mode !== 'off' && (scope === 'all' || (scope === 'pinned' && repo.pinned)));
+}
+
 export async function launchFetch(
-  repositories: (Pick<Repo, 'id' | 'pinned'> & {fetch_mode?:Override})[],
+  repositories: FetchRepo[],
   scope: FetchSettings['scope'],
   fetch: (id: number) => Promise<unknown>,
 ) {
-  const queue = repositories.filter(repo => repo.fetch_mode==='on'
-    || (repo.fetch_mode!=='off' && (scope==='all' || repo.pinned)));
+  const queue = repositories.filter(repo => repoFetchEnabled(repo, scope));
   const failed: number[] = [];
   let next = 0;
   async function worker() {

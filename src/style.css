@@ -1,9 +1,11 @@
 :root{font-family:'Segoe UI Variable','Segoe UI',system-ui,-apple-system,sans-serif;font-synthesis:none;text-rendering:optimizeLegibility}
 *{box-sizing:border-box}
 body{margin:0;min-width:360px}
-button,input,textarea{font:inherit}
-button{cursor:pointer;color:inherit}
-button:disabled{opacity:.45;cursor:not-allowed}
+@layer base {
+  button,input,textarea{font:inherit}
+  button{cursor:pointer;color:inherit}
+  button:disabled{opacity:.45;cursor:not-allowed}
+}
 h1,h2,h3,p{margin:0}
 h2{color:#f2f6fa}
 p{color:#9898a9}
@@ -148,8 +150,10 @@ p{color:#9898a9}
 /* Reponiq: focused native workspace, a restrained violet signature. */
 :root{color-scheme:dark;--muted:#a4a3b3;font-size:14px}
 body{overflow-x:hidden}
-button,input,textarea{transition:background-color 140ms ease,border-color 140ms ease,color 140ms ease}
-button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+@layer base {
+  button,input,textarea{transition:background-color 140ms ease,border-color 140ms ease,color 140ms ease}
+  button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+}
 .sidebar{width:232px;padding:28px 16px 16px;border-color:#282830}
 .brand{padding:0 8px 38px;gap:12px}
 .brand-mark{width:38px;height:40px}

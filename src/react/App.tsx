@@ -38,6 +38,7 @@ import {
   type Activity as ActivityItem,
   type AppPreferences,
   type Discovery,
+  type FetchSettings,
   type GitExpectation,
   type LoginCode,
   type Repo,
@@ -63,7 +64,7 @@ import {
   saveDraft,
   type DraftContext,
 } from "../lib/draft-store";
-import { launchFetch } from "../lib/launch-fetch";
+import { launchFetch, repoFetchEnabled } from "../lib/launch-fetch";
 import { remoteInfo } from "../lib/platform";
 import ConfirmDialog from "./ConfirmDialog";
 import { confirm } from "./confirmation";
@@ -97,6 +98,7 @@ import {
 } from "./shadcn/sidebar";
 import {
   Alert,
+  Badge,
   Button,
   Card,
   Checkbox,
@@ -107,6 +109,7 @@ import {
   Progress,
   Sidebar,
   SidebarMenuButton,
+  Switch,
   Tabs,
   TabsList,
   TabsTrigger,
@@ -114,6 +117,8 @@ import {
   Toaster,
   ToggleGroup,
 } from "./ui";
+import { Button as ShadcnButton } from "./shadcn/button";
+import { Field as ShadcnField, FieldLabel } from "./shadcn/field";
 import { cn } from "./utils";
 const PullRequests = lazy(() => import("./lib/PullRequests"));
 const CommitHistory = lazy(() => import("./lib/CommitHistory"));
@@ -134,6 +139,7 @@ function createView(lifecycle: Lifecycle<Props>) {
   let activities = state<ActivityItem[]>([]);
   let accounts = state<Account[]>([]);
   let view = state("all");
+  const settingsTab = state<"general" | "accounts">("general");
   let query = state("");
   let selected = state<number | null>(null);
   let details = state<RepoDetails | null>(null);
@@ -174,7 +180,7 @@ function createView(lifecycle: Lifecycle<Props>) {
   const resolvedTheme = derived(() =>
     themeAttributes(theme.value, systemDark.value),
   );
-  const setupSteps = ["appearance", "workspace", "startup", "review"] as const;
+  const setupSteps = ["appearance", "workspace", "accounts", "startup", "review"] as const;
   const workflowRuns = derived(() =>
     activities.value.filter(
       (item) => item.kind === "ci" && item.repo_id === selected.value,
@@ -183,6 +189,8 @@ function createView(lifecycle: Lifecycle<Props>) {
   let launchFailures = state<Record<number, string>>({}),
     retryingLaunchFetch = state(false);
   let launchBatch = Date.now();
+  const launchPreferences = state<FetchSettings | null>(null);
+  const savingRepoFetch = state(new Set<number>());
   let metadata = state(new Map<number, RepoWorkflow>());
   let repoMetadataReady = state(false),
     workflowReady = state(false);
@@ -294,6 +302,7 @@ function createView(lifecycle: Lifecycle<Props>) {
         workspace.value = { ...workspace.value, setup_complete: true };
         showSetup.value = false;
         showGuideChoice.value = true;
+        void fetchOnLaunch();
         selected.value = null;
         view.value = "all";
       }
@@ -1012,12 +1021,19 @@ function createView(lifecycle: Lifecycle<Props>) {
     showAdd.value = false;
   }
   async function prepareTour(target: string) {
-    if (target === "commit" && repos.value[0]) {
-      await selectRepo(repos.value[0].id);
-      activeTab.value = "changes";
+    const repo = repos.value.find((repo) => repo.id === selected.value && !repo.missing)
+      ?? repos.value.find((repo) => !repo.missing);
+    if (repo && ["branches", "sync", "commit", "history", "pulls"].includes(target)) {
+      if (selected.value !== repo.id) await selectRepo(repo.id);
+      activeTab.value = target === "history" ? "history" : "changes";
     } else {
       selected.value = null;
-      view.value = "all";
+      if (target === "connect" || target === "startup") {
+        view.value = "settings";
+        settingsTab.value = target === "connect" ? "accounts" : "general";
+      } else {
+        view.value = target === "activity" ? "activity" : "all";
+      }
     }
     await tick();
   }
@@ -1050,10 +1066,34 @@ function createView(lifecycle: Lifecycle<Props>) {
       refreshing.value = false;
     }
   }
+  function startupRepositories() {
+    return orderRepos(repos.value).map((repo) => ({
+      ...repo,
+      fetch_mode: workflowFor(repo)?.fetch_mode,
+    }));
+  }
+  async function fetchPreferencesSaved(settings: FetchSettings) {
+    launchPreferences.value = settings;
+    await loadMetadata();
+  }
+  async function toggleRepoFetch(repo: Repo, enabled: boolean) {
+    if (savingRepoFetch.value.has(repo.id)) return;
+    savingRepoFetch.value.add(repo.id);
+    try {
+      await api.saveRepoFetchMode(targetOf(repo), enabled ? "on" : "off");
+      await loadMetadata();
+    } catch (reason) {
+      toast.error(String(reason));
+    } finally {
+      savingRepoFetch.value.delete(repo.id);
+    }
+  }
   async function fetchOnLaunch() {
     try {
       const settings = await api.fetchSettings();
-      if (!settings.enabled || !alive) return;
+      if (!alive) return;
+      launchPreferences.value = settings;
+      if (!settings.enabled) return;
       await load();
       await tick();
       await new Promise<void>((resolve) =>
@@ -1810,6 +1850,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                 <div className={cn("side-head")}>
                   <span className={cn("side-section")}>{"COLLECTIONS"}</span>
                   <Button
+                    data-tour="collections"
                     title={"Add collection"}
                     aria-label={"Add collection"}
                     disabled={working.value}
@@ -2022,59 +2063,80 @@ function createView(lifecycle: Lifecycle<Props>) {
                               </div>
                               <p title={currentRepo.path}>{currentRepo.path}</p>
                             </div>
-                            <div className={cn("heading-actions")}>
-                              <Button
-                                variant={"secondary"}
-                                aria-label={
-                                  currentRepo.pinned
-                                    ? "Unpin repository"
-                                    : "Pin repository"
-                                }
-                                disabled={pendingPins.value.includes(
-                                  currentRepo.id,
-                                )}
-                                onClick={() => togglePin(currentRepo)}
-                              >
-                                <Pin
-                                  size={16}
-                                  fill={
-                                    currentRepo.pinned ? "currentColor" : "none"
-                                  }
-                                />
-                              </Button>
-                              <Button
-                                variant={"secondary"}
-                                disabled={working.value}
-                                onClick={() => openOrganization(currentRepo)}
-                              >
-                                <Tags size={15} />
-                                {" Organize"}
-                              </Button>
-                            </div>
                           </div>
-                          <div className={cn("workbench-tools")}>
-                            <Button
+                          <div className="repo-command-bar" role="group" aria-label="Repository controls">
+                            <ShadcnButton
+                              variant="outline"
+                              size="icon"
+                              aria-label={
+                                currentRepo.pinned
+                                  ? "Unpin repository"
+                                  : "Pin repository"
+                              }
+                              disabled={pendingPins.value.includes(
+                                currentRepo.id,
+                              )}
+                              onClick={() => togglePin(currentRepo)}
+                            >
+                              <Pin
+                                size={16}
+                                fill={
+                                  currentRepo.pinned ? "currentColor" : "none"
+                                }
+                              />
+                            </ShadcnButton>
+                            <ShadcnButton
+                              variant="outline"
+                              disabled={working.value}
+                              onClick={() => openOrganization(currentRepo)}
+                            >
+                              <Tags size={15} />
+                              {" Organize"}
+                            </ShadcnButton>
+                            {launchPreferences.value && (
+                              <ShadcnField
+                                orientation="horizontal"
+                                className="repo-fetch-switch"
+                                title={launchPreferences.value.enabled ? undefined : "Turn on Fetch on launch in Settings to use this preference."}
+                              >
+                                <Switch
+                                  id="repository-fetch-on-launch"
+                                  checked={repoFetchEnabled(
+                                    { ...currentRepo, fetch_mode: workflowFor(currentRepo)?.fetch_mode },
+                                    launchPreferences.value.scope,
+                                  )}
+                                  disabled={!repoMetadataReady.value || savingRepoFetch.value.has(currentRepo.id)}
+                                  onCheckedChange={(enabled) => void toggleRepoFetch(currentRepo, enabled)}
+                                />
+                                <FieldLabel htmlFor="repository-fetch-on-launch">Fetch on launch</FieldLabel>
+                              </ShadcnField>
+                            )}
+                            <ShadcnButton
                               aria-label={
                                 "Switch branch. Current branch: " +
                                 currentRepo.branch
                               }
                               disabled={working.value || !details.value}
                               onClick={() => (showBranches.value = true)}
-                              className={cn("secondary current-branch")}
+                              variant="outline"
+                              className="current-branch"
+                              data-tour="branches"
                             >
                               <GitBranch size={16} />
                               <span>{currentRepo.branch}</span>
-                            </Button>
+                            </ShadcnButton>
                             {details.value ? (
                               <>
                                 <div
-                                  aria-label={"Branch actions"}
-                                  className={cn("toolbar")}
+                                  role="group"
+                                  aria-label="Branch actions"
+                                  data-tour="sync"
+                                  className="repo-sync-buttons"
                                 >
                                   {details.value.saved_changes.length ? (
                                     <>
-                                      <Button
-                                        variant={"secondary"}
+                                      <ShadcnButton
+                                        variant="outline"
                                         disabled={working.value}
                                         onClick={() =>
                                           (showSavedChanges.value = true)
@@ -2083,35 +2145,35 @@ function createView(lifecycle: Lifecycle<Props>) {
                                         {"Saved changes ("}
                                         {details.value.saved_changes.length}
                                         {")"}
-                                      </Button>
+                                      </ShadcnButton>
                                     </>
                                   ) : null}
                                   {canStash.value ? (
                                     <>
-                                      <Button
-                                        variant={"secondary"}
+                                      <ShadcnButton
+                                        variant="outline"
                                         onClick={() => runGit("stash_changes")}
                                       >
                                         {"Stash changes"}
-                                      </Button>
+                                      </ShadcnButton>
                                     </>
                                   ) : null}
                                   {syncAction.value ? (
                                     <>
                                       {syncAction.value.action !== "fetch" ? (
                                         <>
-                                          <Button
-                                            variant={"secondary"}
+                                          <ShadcnButton
+                                            variant="outline"
                                             disabled={!canFetch.value}
                                             onClick={() => runGit("fetch")}
                                           >
                                             <RefreshCw size={14} />
                                             {" Fetch"}
-                                          </Button>
+                                          </ShadcnButton>
                                         </>
                                       ) : null}
-                                      <Button
-                                        variant={"primary"}
+                                      <ShadcnButton
+                                        variant="default"
                                         disabled={!canFetch.value}
                                         onClick={() =>
                                           confirmGit(syncAction.value!.action)
@@ -2119,7 +2181,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                       >
                                         <syncAction.value.icon size={14} />{" "}
                                         {syncAction.value.label}
-                                      </Button>
+                                      </ShadcnButton>
                                     </>
                                   ) : null}
                                 </div>
@@ -2150,13 +2212,13 @@ function createView(lifecycle: Lifecycle<Props>) {
                               {" Changes "}
                               <span>{currentRepo.dirty}</span>
                             </TabsTrigger>
-                            <TabsTrigger value={"history"}>
+                            <TabsTrigger value={"history"} data-tour="history">
                               <History size={16} />
                               {" Commit history"}
                             </TabsTrigger>
                             {currentRepo.github_full_name ? (
                               <>
-                                <TabsTrigger value={"pulls"}>
+                                <TabsTrigger value={"pulls"} data-tour="pulls">
                                   <GitBranch size={16} />
                                   {" Pull requests"}
                                 </TabsTrigger>
@@ -3233,198 +3295,217 @@ function createView(lifecycle: Lifecycle<Props>) {
                             </p>
                           </div>
                         </div>
-                        <Card
-                          as={"section"}
-                          aria-label={"Appearance"}
-                          className={cn("panel workspace-settings")}
+                        <Tabs.Root
+                          value={settingsTab.value}
+                          onValueChange={(tab) => {
+                            settingsTab.value = tab === "accounts" ? "accounts" : "general";
+                          }}
                         >
-                          <h2>{"Appearance"}</h2>
-                          {appearanceReady.value ? (
-                            <>
-                              <LoadBoundary>
-                                <Suspense fallback={null}>
-                                  <AppearanceEditor
-                                    theme={theme.value}
-                                    systemDark={systemDark.value}
-                                    onsave={saveAppearance}
-                                  />
-                                </Suspense>
-                              </LoadBoundary>
-                            </>
-                          ) : (
-                            <>
-                              {appearanceError.value ? (
-                                <>
-                                  <Alert className={cn("error")}>
-                                    {appearanceError.value}
-                                  </Alert>
-                                </>
-                              ) : null}
-                              <Button
-                                variant={"secondary"}
-                                onClick={loadAppearance}
-                              >
-                                {"Load appearance"}
-                              </Button>
-                            </>
-                          )}
-                        </Card>
-                        <Card className={cn("panel")}>
-                          <div className={cn("panel-title")}>
-                            {"GitHub accounts "}
-                            <span>
-                              {accounts.value.length}
-                              {" connected"}
-                            </span>
-                          </div>
-                          {(() => {
-                            const entries = accounts.value;
-                            return entries.length === 0 ? (
-                              <>
-                                <div className={cn("empty-small")}>
-                                  {
-                                    "No GitHub accounts connected. Local Git works without one."
-                                  }
-                                </div>
-                              </>
-                            ) : (
-                              entries.map((acc, index) => (
-                                <Fragment key={index}>
-                                  <div className={cn("account-row")}>
-                                    <div className={cn("account-avatar")}>
-                                      <PlatformIcon
-                                        remote={"https://github.com"}
-                                        size={19}
-                                      />
-                                    </div>
-                                    <div className={cn("account-info")}>
-                                      <strong>
-                                        {"@"}
-                                        {acc.login}
-                                      </strong>
-                                      <small>{acc.api_host}</small>
-                                    </div>
-                                    <Button
-                                      onClick={() =>
-                                        act(
-                                          () => api.sync(acc.id),
-                                          "Synchronized " + acc.login,
-                                        )
-                                      }
-                                      className={cn("micro")}
-                                    >
-                                      {"Sync workflows"}
-                                    </Button>
-                                    <Button
-                                      onClick={() => disconnectAccount(acc)}
-                                      className={cn("micro dangerous")}
-                                    >
-                                      {"Disconnect"}
-                                    </Button>
-                                  </div>
-                                </Fragment>
-                              ))
-                            );
-                          })()}
-                          <div className={cn("panel-footer")}>
-                            <Button
-                              data-tour={"connect"}
-                              variant={"primary"}
-                              onClick={openAccount}
+                          <TabsList aria-label="Settings sections">
+                            <TabsTrigger value="general">General</TabsTrigger>
+                            <TabsTrigger value="accounts">GitHub accounts</TabsTrigger>
+                          </TabsList>
+                          <Tabs.Content value="general" className="settings-panels">
+                            <Card
+                              as={"section"}
+                              aria-label={"Appearance"}
+                              className={cn("panel workspace-settings")}
                             >
-                              <Plus size={15} />
-                              {" Connect account"}
-                            </Button>
-                          </div>
-                        </Card>
-                        <Card className={cn("panel info-panel")}>
-                          <ShieldCheck size={21} />
-                          <div>
-                            <strong>{"Credentials stay on your device"}</strong>
-                            <p>
-                              {
-                                "GitHub access tokens are stored in your operating system's credential manager. Repository metadata, pins, and activity are stored locally in SQLite. Account connections support GitHub.com; local Git works with other hosts."
-                              }
-                            </p>
-                          </div>
-                        </Card>
-                        <Card className={cn("panel workspace-settings")}>
-                          <h2>{"Repository folder"}</h2>
-                          <WorkspaceFolder
-                            settings={workspace.value}
-                            completeOnSave={workspace.value.setup_complete}
-                            onsaved={updateWorkspace}
-                          />
-                        </Card>
-                        <Card
-                          className={cn(
-                            "panel workspace-settings startup-settings",
-                          )}
-                        >
-                          <h2>{"Startup"}</h2>
-                          <LoadBoundary>
-                            <Suspense fallback={null}>
-                              <StartupSettings />
-                            </Suspense>
-                          </LoadBoundary>
-                        </Card>
-                        <Card className={cn("panel workspace-settings")}>
-                          <h2>{"Workflow defaults"}</h2>
-                          {workflowReady.value ? (
-                            <>
+                              <h2>{"Appearance"}</h2>
+                              {appearanceReady.value ? (
+                                <>
+                                  <LoadBoundary>
+                                    <Suspense fallback={null}>
+                                      <AppearanceEditor
+                                        theme={theme.value}
+                                        systemDark={systemDark.value}
+                                        onsave={saveAppearance}
+                                      />
+                                    </Suspense>
+                                  </LoadBoundary>
+                                </>
+                              ) : (
+                                <>
+                                  {appearanceError.value ? (
+                                    <>
+                                      <Alert className={cn("error")}>
+                                        {appearanceError.value}
+                                      </Alert>
+                                    </>
+                                  ) : null}
+                                  <Button
+                                    variant={"secondary"}
+                                    onClick={loadAppearance}
+                                  >
+                                    {"Load appearance"}
+                                  </Button>
+                                </>
+                              )}
+                            </Card>
+                            <Card className={cn("panel workspace-settings")}>
+                              <h2>{"Repository folder"}</h2>
+                              <WorkspaceFolder
+                                settings={workspace.value}
+                                completeOnSave={workspace.value.setup_complete}
+                                onsaved={updateWorkspace}
+                              />
+                            </Card>
+                            <Card
+                              className={cn(
+                                "panel workspace-settings startup-settings",
+                              )}
+                            >
+                              <h2 data-tour="startup">Startup</h2>
                               <LoadBoundary>
                                 <Suspense fallback={null}>
-                                  <WorkflowSettings
-                                    app={workflowApp.value}
-                                    onsaved={(value) => {
-                                      workflowApp.value =
-                                        value as AppPreferences;
-                                    }}
+                                  <StartupSettings
+                                    repos={startupRepositories()}
+                                    reposReady={repoMetadataReady.value}
+                                    onfetchsaved={fetchPreferencesSaved}
                                   />
                                 </Suspense>
                               </LoadBoundary>
-                            </>
-                          ) : (
-                            <>
+                            </Card>
+                            <Card className={cn("panel workspace-settings")}>
+                              <h2>{"Workflow defaults"}</h2>
+                              {workflowReady.value ? (
+                                <>
+                                  <LoadBoundary>
+                                    <Suspense fallback={null}>
+                                      <WorkflowSettings
+                                        app={workflowApp.value}
+                                        onsaved={(value) => {
+                                          workflowApp.value =
+                                            value as AppPreferences;
+                                        }}
+                                      />
+                                    </Suspense>
+                                  </LoadBoundary>
+                                </>
+                              ) : (
+                                <>
+                                  <Button
+                                    variant={"secondary"}
+                                    onClick={loadWorkflowApp}
+                                  >
+                                    {"Load workflow preferences"}
+                                  </Button>
+                                </>
+                              )}
+                            </Card>
+                            <Card className={cn("panel walkthrough-settings")}>
+                              <div>
+                                <strong>{"A quick tour"}</strong>
+                                <p>
+                                  {"Revisit the basics whenever you need them."}
+                                </p>
+                              </div>
                               <Button
                                 variant={"secondary"}
-                                onClick={loadWorkflowApp}
+                                onClick={() => (showWalkthrough.value = true)}
                               >
-                                {"Load workflow preferences"}
+                                {"Open walkthrough"}
                               </Button>
-                            </>
-                          )}
-                        </Card>
-                        <Card className={cn("panel walkthrough-settings")}>
-                          <div>
-                            <strong>{"A quick tour"}</strong>
-                            <p>
-                              {"Revisit the basics whenever you need them."}
-                            </p>
-                          </div>
-                          <Button
-                            variant={"secondary"}
-                            onClick={() => (showWalkthrough.value = true)}
-                          >
-                            {"Open walkthrough"}
-                          </Button>
-                        </Card>
-                        <Card className={cn("panel walkthrough-settings")}>
-                          <div>
-                            <strong>{"Live logs"}</strong>
-                            <p>
-                              {
-                                "View runtime activity, Git diagnostics, and error details."
-                              }
-                            </p>
-                          </div>
-                          <Button
-                            variant={"secondary"}
-                            onClick={() => (showLiveLogs.value = true)}
-                          >
-                            {"Open live logs"}
-                          </Button>
-                        </Card>
+                            </Card>
+                            <Card className={cn("panel walkthrough-settings")}>
+                              <div>
+                                <strong>{"Live logs"}</strong>
+                                <p>
+                                  {
+                                    "View runtime activity, Git diagnostics, and error details."
+                                  }
+                                </p>
+                              </div>
+                              <Button
+                                variant={"secondary"}
+                                onClick={() => (showLiveLogs.value = true)}
+                              >
+                                {"Open live logs"}
+                              </Button>
+                            </Card>
+                          </Tabs.Content>
+                          <Tabs.Content value="accounts" className="settings-panels">
+                            <Card className={cn("panel")}>
+                              <div className={cn("panel-title")}>
+                                {"GitHub accounts "}
+                                <span>
+                                  {accounts.value.length}
+                                  {" connected"}
+                                </span>
+                              </div>
+                              {(() => {
+                                const entries = accounts.value;
+                                return entries.length === 0 ? (
+                                  <>
+                                    <div className={cn("empty-small")}>
+                                      {
+                                        "No GitHub accounts connected. Local Git works without one."
+                                      }
+                                    </div>
+                                  </>
+                                ) : (
+                                  entries.map((acc, index) => (
+                                    <Fragment key={index}>
+                                      <div className={cn("account-row")}>
+                                        <div className={cn("account-avatar")}>
+                                          <PlatformIcon
+                                            remote={"https://github.com"}
+                                            size={19}
+                                          />
+                                        </div>
+                                        <div className={cn("account-info")}>
+                                          <strong>
+                                            {"@"}
+                                            {acc.login}
+                                          </strong>
+                                          <small>{acc.api_host}</small>
+                                        </div>
+                                        <Button
+                                          onClick={() =>
+                                            act(
+                                              () => api.sync(acc.id),
+                                              "Synchronized " + acc.login,
+                                            )
+                                          }
+                                          className={cn("micro")}
+                                        >
+                                          {"Sync workflows"}
+                                        </Button>
+                                        <Button
+                                          onClick={() => disconnectAccount(acc)}
+                                          className={cn("micro dangerous")}
+                                        >
+                                          {"Disconnect"}
+                                        </Button>
+                                      </div>
+                                    </Fragment>
+                                  ))
+                                );
+                              })()}
+                              <div className={cn("panel-footer")}>
+                                <Button
+                                  data-tour={"connect"}
+                                  variant={"primary"}
+                                  onClick={openAccount}
+                                >
+                                  <Plus size={15} />
+                                  {" Connect account"}
+                                </Button>
+                              </div>
+                            </Card>
+                            <Card className={cn("panel info-panel")}>
+                              <ShieldCheck size={21} />
+                              <div>
+                                <strong>{"Credentials stay on your device"}</strong>
+                                <p>
+                                  {
+                                    "GitHub access tokens are stored in your operating system's credential manager. Repository metadata, pins, and activity are stored locally in SQLite. Account connections support GitHub.com; local Git works with other hosts."
+                                  }
+                                </p>
+                              </div>
+                            </Card>
+                          </Tabs.Content>
+                        </Tabs.Root>
                       </>
                     ) : (
                       <>
@@ -4706,7 +4787,6 @@ function createView(lifecycle: Lifecycle<Props>) {
         {showWalkthrough.value ? (
           <>
             <Walkthrough
-              hasRepo={repos.value.length > 0}
               prepare={prepareTour}
               onclose={() => (showWalkthrough.value = false)}
             />
@@ -4994,20 +5074,21 @@ function createView(lifecycle: Lifecycle<Props>) {
           <>
             <Modal
               label={"Set up Reponiq"}
-              canClose={
-                !setupBusy.value &&
-                !startupBusy.value &&
-                !identityBusy.value &&
-                !advancingSetup.value
-              }
-              onclose={() => (showSetup.value = false)}
+              canClose={false}
+              showCloseButton={false}
+              onclose={() => {}}
             >
               <div className={cn("setup-wizard")}>
-                <Progress
-                  label={"Setup progress"}
-                  max={4}
-                  value={setupSteps.indexOf(setupStep.value) + 1}
-                />
+                <div className="setup-progress">
+                  <span aria-hidden="true">
+                    {setupSteps.indexOf(setupStep.value) + 1}/{setupSteps.length}
+                  </span>
+                  <Progress
+                    label="Setup progress"
+                    max={setupSteps.length}
+                    value={setupSteps.indexOf(setupStep.value) + 1}
+                  />
+                </div>
                 {setupStep.value === "appearance" ? (
                   <>
                     <h2>{"Choose your appearance"}</h2>
@@ -5060,19 +5141,6 @@ function createView(lifecycle: Lifecycle<Props>) {
                             {found.value?.items.length
                               ? " (" + found.value.items.length + ")"
                               : ""}
-                          </Button>
-                          <Button
-                            variant={"secondary"}
-                            disabled={
-                              setupBusy.value ||
-                              setupFolderDirty.value ||
-                              identityBusy.value
-                            }
-                            onClick={openAccount}
-                          >
-                            {accounts.value.length
-                              ? "Connect another GitHub account"
-                              : "Connect GitHub"}
                           </Button>
                         </div>
                         {discoveryError.value ? (
@@ -5133,13 +5201,41 @@ function createView(lifecycle: Lifecycle<Props>) {
                       </>
                     ) : (
                       <>
-                        {setupStep.value === "startup" ? (
+                        {setupStep.value === "accounts" ? (
+                          <>
+                            <h2>Connect GitHub</h2>
+                            <p>Connect an account to view pull requests and workflow runs.</p>
+                            {accounts.value.map((account) => (
+                              <div className="account-row" key={account.id}>
+                                <PlatformIcon remote="https://github.com" size={19} />
+                                <span>@{account.login}</span>
+                                <Badge variant="secondary">Connected</Badge>
+                              </div>
+                            ))}
+                            <Button variant="secondary" onClick={openAccount} disabled={advancingSetup.value}>
+                              {accounts.value.length ? "Connect another account" : "Connect GitHub"}
+                            </Button>
+                            {setupError.value && <Alert className="error">{setupError.value}</Alert>}
+                            <div className="modal-actions">
+                              <Button
+                                variant="primary"
+                                disabled={advancingSetup.value}
+                                onClick={() => void continueSetup("accounts").catch(() => {})}
+                              >
+                                {accounts.value.length ? "Continue" : "Continue without GitHub"}
+                              </Button>
+                            </div>
+                          </>
+                        ) : setupStep.value === "startup" ? (
                           <>
                             <h2>{"Startup preferences"}</h2>
                             <LoadBoundary>
                               <Suspense fallback={null}>
                                 <StartupSettings
                                   initial={true}
+                                  repos={startupRepositories()}
+                                  reposReady={repoMetadataReady.value}
+                                  onfetchsaved={fetchPreferencesSaved}
                                   busy={startupBusy.value}
                                   ondrafts={(value) =>
                                     (workflowApp.value = value)
@@ -5193,7 +5289,7 @@ function createView(lifecycle: Lifecycle<Props>) {
             >
               <h2>{"Take a quick look around?"}</h2>
               <p>
-                {"See how to find repositories, review changes, and commit."}
+                {"Learn the daily Git workflow, from opening a repository to publishing a branch and reviewing a pull request."}
               </p>
               {guideError.value ? (
                 <>

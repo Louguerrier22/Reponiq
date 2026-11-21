@@ -1,5 +1,7 @@
+import { ChevronDown } from "lucide-react";
 import { observer } from "mobx-react-lite";
-import { api,type AppPreferences,type FetchSettings } from "../../lib/api";
+import { api,type AppPreferences,type FetchSettings,type Override,type Repo } from "../../lib/api";
+import { repoFetchEnabled } from "../../lib/launch-fetch";
 import { confirm } from "../confirmation";
 import {
 SelectOption,
@@ -8,9 +10,16 @@ state,
 useController,
 type Lifecycle
 } from "../controller";
+import { Checkbox } from "../shadcn/checkbox";
+import { Popover, PopoverContent, PopoverTrigger } from "../shadcn/popover";
 import { Button,Field,Label,NativeSelect,Switch } from "../ui";
 import { cn } from "../utils";
+type FetchRepo = Repo & { fetch_mode?: Override };
+
 type BaseProps = {
+  repos: FetchRepo[];
+  reposReady: boolean;
+  onfetchsaved: (settings: FetchSettings) => void | Promise<void>;
   initial?: boolean;
   busy?: boolean;
   ondone?: () => void | Promise<void>;
@@ -26,6 +35,7 @@ function createView(lifecycle: Lifecycle<Props>) {
   const ondrafts = derived(() => lifecycle.props().ondrafts);
   const fetchScopeId = lifecycle.id;
   let fetchSettings = state<FetchSettings | null>(null);
+  const repoChoices = state(new Map<string, boolean>());
   let autostart = state<boolean | null>(null);
   let startAtSignIn = state(false);
   let unavailable = state("");
@@ -77,6 +87,12 @@ function createView(lifecycle: Lifecycle<Props>) {
       }
     }
   }
+  function repoKey(repo: FetchRepo) {
+    return JSON.stringify([repo.id, repo.path, repo.registration]);
+  }
+  function checked(repo: FetchRepo, scope: FetchSettings["scope"]) {
+    return repoChoices.value.get(repoKey(repo)) ?? repoFetchEnabled(repo, scope);
+  }
   async function save() {
     if (!fetchSettings.value || busy.value) return;
     busy.value = true;
@@ -94,9 +110,16 @@ function createView(lifecycle: Lifecycle<Props>) {
         }))
       )
         return;
-      fetchSettings.value = await api.saveFetchSettings({
-        ...fetchSettings.value,
+      const changes = lifecycle.props().repos.flatMap((repo) => {
+        const choice = repoChoices.value.get(repoKey(repo));
+        if (choice === undefined) return [];
+        const { id, path, registration } = repo;
+        return [{ target: { id, path, registration }, mode: (choice ? "on" : "off") as Override }];
       });
+      const settings = await api.saveFetchSettings({ ...fetchSettings.value }, changes);
+      fetchSettings.value = settings;
+      await lifecycle.props().onfetchsaved(settings);
+      repoChoices.value.clear();
       if (
         autostart.value !== null &&
         (!startAtSignIn.value || startAtSignIn.value !== autostart.value)
@@ -137,6 +160,8 @@ function createView(lifecycle: Lifecycle<Props>) {
   }
   return () => {
     const settings = fetchSettings.value;
+    const { repos, reposReady } = lifecycle.props();
+    const included = settings ? repos.filter((repo) => checked(repo, settings.scope)).length : 0;
     return (
       <>
         <div className={cn("startup-options")}>
@@ -158,7 +183,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                   "Refreshes remote branches in the background. You can start working immediately."
                 }
               </p>
-              <Field id={fetchScopeId} label={"Repositories to fetch"}>
+              <Field id={fetchScopeId} label={"Default fetch scope"}>
                 <NativeSelect
                   id={fetchScopeId}
                   value={settings.scope}
@@ -171,11 +196,45 @@ function createView(lifecycle: Lifecycle<Props>) {
                   <SelectOption value={"pinned"}>
                     {"Pinned repositories"}
                   </SelectOption>
-                  <SelectOption value={"all"}>
-                    {"All registered repositories"}
-                  </SelectOption>
+                  <SelectOption value={"all"}>All repositories</SelectOption>
+                  <SelectOption value={"selected"}>Selected repositories only</SelectOption>
                 </NativeSelect>
               </Field>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="secondary"
+                    className="justify-between"
+                    disabled={busy.value || !settings.enabled || !reposReady}
+                  >
+                    Repositories to fetch ({included}/{repos.length})
+                    <ChevronDown aria-hidden="true" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent
+                  align="start"
+                  aria-label="Repositories to fetch"
+                  className="startup-fetch-popover"
+                >
+                  {repos.length ? repos.map((repo) => {
+                    const key = repoKey(repo);
+                    const id = fetchScopeId + "-repo-" + repo.id;
+                    return (
+                      <Label key={key} htmlFor={id} title={repo.path} className="startup-fetch-choice">
+                        <Checkbox
+                          id={id}
+                          checked={checked(repo, settings.scope)}
+                          onCheckedChange={(next) => {
+                            repoChoices.value.set(key, next === true);
+                            saved.value = false;
+                          }}
+                        />
+                        <span>{repo.name}<small>{repo.path}</small></span>
+                      </Label>
+                    );
+                  }) : <p>No repositories in your workspace yet.</p>}
+                </PopoverContent>
+              </Popover>
             </>
           ) : null}
           <Label className={cn("scope-choice")}>
@@ -240,7 +299,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                 <Button
                   disabled={busy.value}
                   onClick={skip}
-                  className={cn("text-action")}
+                  variant="ghost"
                 >
                   {"Skip for now"}
                 </Button>

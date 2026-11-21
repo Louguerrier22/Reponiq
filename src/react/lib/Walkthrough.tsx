@@ -7,71 +7,116 @@ tick,
 useController,
 type Lifecycle
 } from "../controller";
-import { Button } from "../ui";
+import { Button, Progress } from "../ui";
 import { cn } from "../utils";
 import Modal from "./Modal";
+const steps = [
+  {
+    title: "Open a repository",
+    body: "Use Add repository to create, clone, or add an existing folder. Use Import to add several at once.",
+    target: "add",
+  },
+  {
+    title: "Find and organize your work",
+    body: "Search by name, branch, tag, or collection. Pin frequent repositories or switch between grid and row views.",
+    target: "search",
+  },
+  {
+    title: "Group related repositories",
+    body: "Use the plus beside Collections, then choose a repository and a collection.",
+    target: "collections",
+  },
+  {
+    title: "Work on a branch",
+    body: "Open the branch control to create or switch branches. Use Stash changes to set work aside, then Saved changes to bring it back.",
+    target: "branches",
+  },
+  {
+    title: "Fetch, pull, and push",
+    body: "Fetch checks for remote changes. Pull brings them into your current branch. Push sends your commits to the remote.",
+    target: "sync",
+  },
+  {
+    title: "Review and commit",
+    body: "Open a file to review its diff. With no files checked, Commit uses all changes. Switch between Exclude checked and Include checked to choose files.",
+    target: "commit",
+  },
+  {
+    title: "Look back at a change",
+    body: "Open History to inspect earlier commits and their diffs. Open Activity history in the sidebar for workspace events.",
+    target: "history",
+  },
+  {
+    title: "Connect a GitHub account",
+    body: "Open Settings → GitHub accounts to connect or manage an account.",
+    target: "connect",
+  },
+  {
+    title: "Review pull requests and checks",
+    body: "For a connected GitHub repository, open Pull requests to review changes and checks. Open Workflows to see runs.",
+    target: "pulls",
+  },
+  {
+    title: "Choose what fetches on launch",
+    body: "Set a workspace default and choose repositories in Settings → General → Startup. Use Fetch on launch on a repository page to change its preference.",
+    target: "startup",
+  },
+  {
+    title: "Install an app update",
+    body: "Open App updates from the sidebar. When an update is ready, you can restart from there.",
+    target: "updates",
+  },
+];
+
 type Props = {
   onclose: () => void;
   prepare: (target: string) => Promise<void>;
-  hasRepo?: boolean;
 };
 function createView(lifecycle: Lifecycle<Props>) {
   const onclose = derived(() => lifecycle.props().onclose);
   const prepare = derived(() => lifecycle.props().prepare);
-  const hasRepo = derived(() => lifecycle.props().hasRepo ?? false);
   let step = state(0),
     busy = state(false),
     saving = state(false),
     error = state("");
   let heading: HTMLHeadingElement;
+  let tourCard: HTMLElement | null = null;
   let alive = true,
     frame = 0;
-  let ring = state({ left: 0, top: 0, width: 0, height: 0 });
+  const ring = state<{ left: number; top: number; width: number; height: number } | null>(null);
   let card = state({ left: 20, top: 20 });
-  const steps = derived(() => [
-    {
-      title: "Add your first repository.",
-      body: "Choose Create, Add from folder or Clone. Select where the repository lives on your computer.",
-      target: "add",
-    },
-    {
-      title: "Find a project quickly.",
-      body: "Search by name, branch, tag or collection. Ctrl+K brings you straight here.",
-      target: "search",
-    },
-    ...(hasRepo.value
-      ? [
-          {
-            title: "Review and commit.",
-            body: "Open a file to review its diff. Write a message and commit the changes you want to keep.",
-            target: "commit",
-          },
-        ]
-      : []),
-  ]);
-  const current = derived(() => steps.value[step.value]);
+  const current = derived(() => steps[step.value]);
   function position() {
     const el = document.querySelector<HTMLElement>(
       '[data-tour="' + current.value.target + '"]',
     );
-    if (!el) return;
-    const b = el.getBoundingClientRect();
+    const b = el?.getBoundingClientRect();
+    const width = tourCard?.offsetWidth ?? Math.min(370, innerWidth - 32);
+    const height = tourCard?.offsetHeight ?? 270;
+    if (!b?.width || !b.height) {
+      ring.value = null;
+      card.value = {
+        left: Math.max(16, (innerWidth - width) / 2),
+        top: Math.max(16, (innerHeight - height) / 2),
+      };
+      return;
+    }
     ring.value = {
       left: Math.max(6, b.left - 7),
       top: Math.max(6, b.top - 7),
       width: Math.min(b.width + 14, innerWidth - 12),
       height: b.height + 14,
     };
-    const width = Math.min(370, innerWidth - 32);
     const below = b.bottom + 24;
     card.value = {
       left: Math.max(16, Math.min(b.left, innerWidth - width - 16)),
-      top: below + 245 < innerHeight ? below : Math.max(16, b.top - 265),
+      top: below + height + 16 <= innerHeight ? below : Math.max(16, b.top - height - 24),
     };
   }
   async function move(next: number) {
     if (busy.value) return;
     busy.value = true;
+    ring.value = null;
     step.value = next;
     error.value = "";
     try {
@@ -129,34 +174,18 @@ function createView(lifecycle: Lifecycle<Props>) {
         canClose={!saving.value}
         walkthrough={true}
       >
-        <div
-          aria-hidden={"true"}
-          className={cn("tour-ring")}
-          style={{
-            left: ring.value.left + "px",
-            top: ring.value.top + "px",
-            width: ring.value.width + "px",
-            height: ring.value.height + "px",
-          }}
-        />
+        {ring.value && (
+          <div aria-hidden="true" className="tour-ring" style={ring.value} />
+        )}
         <section
+          ref={(node) => { tourCard = node; }}
           className={cn("tour-card")}
           style={{ left: card.value.left + "px", top: card.value.top + "px" }}
         >
-          <Button
-            aria-label={"Close dialog"}
-            title={"Close dialog"}
-            disabled={saving.value}
-            onClick={finish}
-            className={cn("dialog-close")}
-          >
-            {"×"}
-          </Button>
-          <p aria-live={"polite"} className={cn("tour-progress")}>
-            {step.value + 1}
-            {" / "}
-            {steps.value.length}
-          </p>
+          <div className="setup-progress">
+            <span aria-hidden="true">{step.value + 1}/{steps.length}</span>
+            <Progress label="Guide progress" value={step.value + 1} max={steps.length} />
+          </div>
           <h2
             ref={(node) => {
               if (node) heading = node;
@@ -177,7 +206,7 @@ function createView(lifecycle: Lifecycle<Props>) {
             <Button
               disabled={saving.value}
               onClick={finish}
-              className={cn("text-action")}
+              variant="ghost"
             >
               {"Skip tour"}
             </Button>
@@ -197,12 +226,12 @@ function createView(lifecycle: Lifecycle<Props>) {
                 variant={"primary"}
                 disabled={busy.value || saving.value}
                 onClick={() =>
-                  step.value === steps.value.length - 1
+                  step.value === steps.length - 1
                     ? finish()
                     : move(step.value + 1)
                 }
               >
-                {step.value === steps.value.length - 1 ? "Get started" : "Next"}
+                {step.value === steps.length - 1 ? "Get started" : "Next"}
               </Button>
             </div>
           </div>

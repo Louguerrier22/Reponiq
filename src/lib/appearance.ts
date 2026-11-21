@@ -15,7 +15,7 @@ export type Theme = {
   imported?: RegistryTheme;
 };
 
-export type SetupStep = 'appearance' | 'workspace' | 'startup' | 'review' | 'complete';
+export type SetupStep = 'appearance' | 'workspace' | 'accounts' | 'startup' | 'review' | 'complete';
 export type AppearanceSettings = { theme: Theme; setup_step: SetupStep };
 
 export const presets = {

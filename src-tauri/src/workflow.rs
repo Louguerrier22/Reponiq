@@ -181,6 +181,21 @@ pub(super) fn fetch_mode(db: &Connection, id: i64) -> Result<Override, String> {
     Override::parse(value.as_deref().unwrap_or("inherit"))
 }
 
+pub(super) fn set_fetch_mode(
+    db: &Connection,
+    target: &Target,
+    mode: Override,
+) -> Result<(), String> {
+    target.verify(db)?;
+    ensure(db, target.id)?;
+    db.execute(
+        "UPDATE repo_workflow SET fetch_mode=?2 WHERE repo_id=?1",
+        params![target.id, mode.as_str()],
+    )
+    .map_err(err)?;
+    Ok(())
+}
+
 pub(super) fn fetched(db: &Connection, id: i64, path: &std::path::Path) -> Result<(), String> {
     if repo_path(db, id)? == path {
         db.execute("INSERT INTO repo_workflow(repo_id,fetched_at) VALUES(?1,?2) ON CONFLICT(repo_id) DO UPDATE SET fetched_at=excluded.fetched_at", params![id,now()]).map_err(err)?;

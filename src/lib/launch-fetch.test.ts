@@ -1,5 +1,11 @@
 import { expect, test } from 'vitest';
-import { launchFetch } from './launch-fetch';
+import { launchFetch, repoFetchEnabled } from './launch-fetch';
+
+test('selected scope fetches only repositories explicitly enabled', () => {
+  expect(repoFetchEnabled({ id: 1, pinned: true }, 'selected')).toBe(false);
+  expect(repoFetchEnabled({ id: 2, pinned: false, fetch_mode: 'on' }, 'selected')).toBe(true);
+  expect(repoFetchEnabled({ id: 3, pinned: true, fetch_mode: 'off' }, 'selected')).toBe(false);
+});
 
 test('pinned scope fetches only pins, with at most two in flight, and keeps failures retryable', async () => {
   let active = 0;

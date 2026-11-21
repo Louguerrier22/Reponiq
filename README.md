@@ -37,7 +37,7 @@ Install [Git](https://git-scm.com/downloads) first. See [installation and checks
 
 **Work with pull requests.** Connect GitHub in your browser. Compare a published branch before opening a PR. Read patches, check the results, submit a review and merge when GitHub allows it.
 
-First-run setup offers a default folder, optional launch fetch and optional sign-in startup. Change these choices or replay the walkthrough from Settings. Import local repositories from GitHub Desktop history, VS Code recent folders, or any Git client's repository folder and review the matches before adding them.
+First-run setup takes you through appearance, your workspace, optional GitHub connection, startup, and review. Under **Settings → General → Startup**, choose a default fetch scope and use the repository checklist to make exceptions. Each repository also has a **Fetch on launch** switch. The workspace-wide **Fetch on launch** setting enables automatic fetching. Manage connections from **Settings → GitHub accounts** and replay the walkthrough from **Settings → General**. Import local repositories from GitHub Desktop history, VS Code recent folders, or any Git client's repository folder and review the matches before adding them.
 
 ## Supported platforms
 

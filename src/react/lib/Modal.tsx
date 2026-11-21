@@ -8,12 +8,14 @@ export default function Modal({
   onclose,
   canClose = true,
   walkthrough = false,
+  showCloseButton = true,
   children,
 }: PropsWithChildren<{
   label: string;
   onclose: () => void;
   canClose?: boolean;
   walkthrough?: boolean;
+  showCloseButton?: boolean;
 }>) {
   const opener = useRef(
     document.activeElement instanceof HTMLElement
@@ -47,7 +49,7 @@ export default function Modal({
       >
         <DialogTitle className="sr-only">{label}</DialogTitle>
         {children}
-        {!walkthrough && (
+        {!walkthrough && showCloseButton && (
           <Button
             className="dialog-close"
             aria-label="Close dialog"

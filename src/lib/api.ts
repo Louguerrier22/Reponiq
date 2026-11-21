@@ -41,7 +41,7 @@ export type OnlineRepo = {id:number;name:string;full_name:string;private:boolean
 export type RepositoryOwner = {login:string;type:string};
 export type CreatedRepo = {repo:Repo;warning:string|null};
 export type WorkspaceSettings = {default_folder:string|null;auto_detect:boolean;setup_complete:boolean};
-export type FetchSettings = {enabled:boolean;scope:'pinned'|'all'};
+export type FetchSettings = {enabled:boolean;scope:'pinned'|'all'|'selected'};
 export type DiscoveredRepo = {name:string;path:string;source:string};
 export type Discovery = {items:DiscoveredRepo[];limited:boolean;notes:string[]};
 export type ImportSource = 'default_folder'|'folder'|'github_desktop'|'vs_code';
@@ -60,7 +60,10 @@ export const api = {
   workspaceSettings: () => invoke<WorkspaceSettings>('workspace_settings'),
   saveWorkspaceSettings: (input:WorkspaceSettings) => invoke<WorkspaceSettings>('save_workspace_settings',{input}),
   fetchSettings: () => invoke<FetchSettings>('fetch_settings'),
-  saveFetchSettings: (input:FetchSettings) => invoke<FetchSettings>('save_fetch_settings',{input}),
+  saveFetchSettings: (input:FetchSettings, changes: {target: Target; mode: Override}[] = []) =>
+    invoke<FetchSettings>('save_fetch_settings',{input, changes}),
+  saveRepoFetchMode: (target: Target, mode: Override) =>
+    invoke<void>('save_repo_fetch_mode',{target, mode}),
   launchFetch: (id:number,batch:number) => invoke<boolean>('launch_fetch',{id,batch}),
   workflowApp: () => invoke<AppPreferences>('workflow_app'),
   saveWorkflowApp: (input:AppPreferences) => invoke<AppPreferences>('save_workflow_app',{input}),

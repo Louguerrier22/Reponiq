@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 const THEME_KEY: &str = "appearance-v1";
 const REGISTRY_THEME_KEY: &str = "appearance-registry-v1";
 const STEP_KEY: &str = "onboarding-step-v1";
+const ACCOUNT_STEP_KEY: &str = "onboarding-accounts-pending-v1";
 const LEGACY_SETUP_KEY: &str = "workspace-setup-complete";
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
@@ -83,6 +84,7 @@ pub(super) struct Theme {
 pub(super) enum SetupStep {
     Appearance,
     Workspace,
+    Accounts,
     Startup,
     Review,
     Complete,
@@ -92,7 +94,8 @@ impl SetupStep {
     fn next(self) -> Self {
         match self {
             Self::Appearance => Self::Workspace,
-            Self::Workspace => Self::Startup,
+            Self::Workspace => Self::Accounts,
+            Self::Accounts => Self::Startup,
             Self::Startup => Self::Review,
             Self::Review | Self::Complete => Self::Complete,
         }
@@ -130,13 +133,17 @@ fn setup_step(db: &Connection) -> Result<SetupStep, String> {
             )
         }
     }
-    read(db, STEP_KEY)?
+    let step = read(db, STEP_KEY)?
         .map(|value| {
             serde_json::from_str(&value).map_err(|_| {
-                "Saved setup progress is unsupported. Your settings were preserved.".into()
+                "Saved setup progress is unsupported. Your settings were preserved.".to_owned()
             })
         })
-        .unwrap_or(Ok(SetupStep::Appearance))
+        .unwrap_or(Ok(SetupStep::Appearance))?;
+    if step == SetupStep::Startup && read(db, ACCOUNT_STEP_KEY)?.as_deref() == Some("true") {
+        return Ok(SetupStep::Accounts);
+    }
+    Ok(step)
 }
 
 fn theme(db: &Connection) -> Result<Theme, String> {
@@ -165,7 +172,19 @@ fn advance(db: &mut Connection, expected: SetupStep) -> Result<SetupStep, String
         return Ok(current);
     }
     let next = current.next();
-    write(&tx, STEP_KEY, &serde_json::to_string(&next).map_err(err)?)?;
+    // Older builds resume at Startup if setup stops at the GitHub step.
+    let stored_step = if next == SetupStep::Accounts {
+        write(&tx, ACCOUNT_STEP_KEY, "true")?;
+        SetupStep::Startup
+    } else {
+        write(&tx, ACCOUNT_STEP_KEY, "false")?;
+        next
+    };
+    write(
+        &tx,
+        STEP_KEY,
+        &serde_json::to_string(&stored_step).map_err(err)?,
+    )?;
     if next == SetupStep::Complete {
         write(&tx, LEGACY_SETUP_KEY, "true")?;
     }
@@ -253,6 +272,12 @@ mod tests {
         assert_eq!(setup_step(&db).unwrap(), SetupStep::Workspace);
         assert_eq!(
             advance(&mut db, SetupStep::Workspace).unwrap(),
+            SetupStep::Accounts
+        );
+        assert_eq!(setup_step(&db).unwrap(), SetupStep::Accounts);
+        assert_eq!(read(&db, STEP_KEY).unwrap().as_deref(), Some("\"startup\""));
+        assert_eq!(
+            advance(&mut db, SetupStep::Accounts).unwrap(),
             SetupStep::Startup
         );
         assert_eq!(
