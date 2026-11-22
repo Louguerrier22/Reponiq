@@ -482,11 +482,14 @@ function createView(lifecycle: Lifecycle<Props>) {
   );
   let actionResult = state("");
   let refreshing = state(false);
+  let refreshInFlight = false;
   let detailError = state("");
   let fileQuery = state("");
   let selectedFile = state<string | null>(null);
   let diffCode = state("");
   let diffLoading = state(false);
+  let diffReady = false;
+  let diffInFlight: number | undefined;
   let diffError = state("");
   let diffSequence = 0;
   let loadFlight: Promise<void> | null = null;
@@ -914,6 +917,8 @@ function createView(lifecycle: Lifecycle<Props>) {
     diffCode.value = "";
     diffError.value = "";
     diffLoading.value = false;
+    diffReady = false;
+    diffInFlight = undefined;
     ++diffSequence;
     return sequence;
   }
@@ -947,7 +952,7 @@ function createView(lifecycle: Lifecycle<Props>) {
           void showDiff(
             file,
             id,
-            file === selectedFile.value && !diffError.value,
+            file === selectedFile.value,
           );
         else {
           ++diffSequence;
@@ -955,6 +960,8 @@ function createView(lifecycle: Lifecycle<Props>) {
           diffCode.value = "";
           diffError.value = "";
           diffLoading.value = false;
+          diffReady = false;
+          diffInFlight = undefined;
         }
       }
       return result;
@@ -1055,14 +1062,16 @@ function createView(lifecycle: Lifecycle<Props>) {
         : repo,
     );
   }
-  async function refresh() {
-    if (refreshing.value || working.value) return;
-    refreshing.value = true;
+  async function refresh(background = false) {
+    if (refreshInFlight || working.value) return;
+    refreshInFlight = true;
+    if (!background) refreshing.value = true;
     try {
       if (selected.value === null) await load();
       else if (details.value || detailError.value)
         await readDetails(selected.value);
     } finally {
+      refreshInFlight = false;
       refreshing.value = false;
     }
   }
@@ -1583,24 +1592,28 @@ function createView(lifecycle: Lifecycle<Props>) {
     id = selected.value,
     background = false,
   ) {
-    if (id === null || (background && diffLoading.value)) return;
+    if (id === null || (background && diffInFlight !== undefined)) return;
     const sequence = ++diffSequence;
-    if (!background) {
+    diffInFlight = sequence;
+    if (file !== selectedFile.value) {
       selectedFile.value = file;
       diffCode.value = "";
       diffError.value = "";
-      diffLoading.value = true;
+      diffReady = false;
     }
+    if (!background && !diffReady) diffLoading.value = true;
     try {
       const code = await api.git(id, "diff", file === null ? [] : [file]);
       if (sequence === diffSequence && selected.value === id) {
         diffCode.value = code;
+        diffReady = true;
         diffError.value = "";
       }
     } catch (e) {
       if (sequence === diffSequence && selected.value === id)
         diffError.value = String(e);
     } finally {
+      if (diffInFlight === sequence) diffInFlight = undefined;
       if (sequence === diffSequence) diffLoading.value = false;
     }
   }
@@ -1707,7 +1720,7 @@ function createView(lifecycle: Lifecycle<Props>) {
     }, 60000);
     const statusTimer = setInterval(() => {
       if (idle()) {
-        if (selected.value !== null) void refresh();
+        if (selected.value !== null) void refresh(true);
         else
           requestStatuses(
             visible.value
@@ -1720,7 +1733,7 @@ function createView(lifecycle: Lifecycle<Props>) {
     const focus = () => {
       if (idle() && Date.now() - lastFocus > 2000) {
         lastFocus = Date.now();
-        if (selected.value !== null) void refresh();
+        if (selected.value !== null) void refresh(true);
         else void load();
       }
     };
@@ -2352,7 +2365,19 @@ function createView(lifecycle: Lifecycle<Props>) {
                               </section>
                             </>
                           ) : null}
-                          {detailError.value ? (
+                          {detailError.value && details.value ? (
+                            <div role="status" className="workbench-status">
+                              <span>Git status couldn’t refresh. Showing the last loaded changes.</span>
+                              <Button
+                                variant="ghost"
+                                disabled={refreshing.value || working.value}
+                                onClick={() => void refresh()}
+                              >
+                                Retry
+                              </Button>
+                            </div>
+                          ) : null}
+                          {detailError.value && !details.value ? (
                             <>
                               <div role={"alert"} className={cn("empty-block")}>
                                 <CircleAlert size={20} />
@@ -2415,7 +2440,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                                   refreshing.value ||
                                                   working.value
                                                 }
-                                                onClick={refresh}
+                                                onClick={() => void refresh()}
                                                 className={cn(
                                                   "text-action refresh-files",
                                                 )}
@@ -2674,7 +2699,8 @@ function createView(lifecycle: Lifecycle<Props>) {
                                                   "Working tree"}
                                               </span>
                                               <Button
-                                                disabled={diffLoading.value}
+                                                aria-pressed={selectedFile.value === null}
+                                                disabled={selectedFile.value === null && !diffError.value}
                                                 onClick={() =>
                                                   showDiff(null, currentRepo.id)
                                                 }
@@ -2699,7 +2725,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                               </>
                                             ) : (
                                               <>
-                                                {diffError.value ? (
+                                                {diffError.value && !diffCode.value ? (
                                                   <>
                                                     <div
                                                       role={"alert"}
@@ -2804,6 +2830,17 @@ function createView(lifecycle: Lifecycle<Props>) {
                                                 )}
                                               </>
                                             )}
+                                            {diffError.value && diffCode.value ? (
+                                              <div role="status" className="workbench-status">
+                                                <span>Couldn’t refresh diff.</span>
+                                                <Button
+                                                  variant="ghost"
+                                                  onClick={() => void showDiff(selectedFile.value, currentRepo.id)}
+                                                >
+                                                  Retry
+                                                </Button>
+                                              </div>
+                                            ) : null}
                                           </Card>
                                         </div>
                                         <div
