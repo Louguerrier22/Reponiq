@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.2
+
+- Overview shows collection cards by default when collections exist. Switch to All to see every repository, including unassigned repositories.
+- Changes, Commit history, and Activity use flatter surfaces and clearer selection highlights. The Changes diff scrolls in its own panel and keeps its position during refresh.
+- Changes highlights the next branch action and groups secondary actions under More actions.
+- Settings places A quick tour and Live logs side by side where space allows and improves description contrast.
+
 ## 1.2.0
 
 - Reponiq now uses React and shadcn/ui for its sidebar, dialogs and controls, with the existing desktop theme.

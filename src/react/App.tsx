@@ -118,6 +118,7 @@ import {
   ToggleGroup,
 } from "./ui";
 import { Button as ShadcnButton } from "./shadcn/button";
+import { Popover, PopoverClose, PopoverContent, PopoverTrigger } from "./shadcn/popover";
 import { Field as ShadcnField, FieldLabel } from "./shadcn/field";
 import { cn } from "./utils";
 const PullRequests = lazy(() => import("./lib/PullRequests"));
@@ -139,6 +140,7 @@ function createView(lifecycle: Lifecycle<Props>) {
   const activeActivityId = state<number | null>(null);
   let accounts = state<Account[]>([]);
   let view = state("all");
+  const overviewChoice = state<"all" | "collections" | null>(null);
   const settingsTab = state<"general" | "accounts">("general");
   let query = state("");
   let selected = state<number | null>(null);
@@ -812,6 +814,20 @@ function createView(lifecycle: Lifecycle<Props>) {
       repos.value.map((r) => r.collection).filter((x): x is string => !!x),
     ),
   ]);
+  const overviewMode = derived(() =>
+    collections.value.length ? (overviewChoice.value ?? "collections") : "all",
+  );
+  const showCollectionShelf = derived(() =>
+    view.value === "all" && overviewMode.value === "collections",
+  );
+  const collectionShelf = derived(() => {
+    const counts = new Map<string, number>();
+    for (const repo of repos.value) {
+      if (repo.collection) counts.set(repo.collection, (counts.get(repo.collection) ?? 0) + 1);
+    }
+    const search = query.value.trim().toLocaleLowerCase();
+    return [...counts].filter(([name]) => name.toLocaleLowerCase().includes(search));
+  });
   const date = (sec: number) =>
     new Date(sec * 1000).toLocaleString(undefined, {
       month: "short",
@@ -942,13 +958,11 @@ function createView(lifecycle: Lifecycle<Props>) {
       detailError.value = "";
       updateRepoStatus(id, result);
       if (activeTab.value === "changes") {
-        if (paths.size)
-          void showDiff(
-            file,
-            id,
-            file === selectedFile.value,
-          );
-        else {
+        if (paths.size) {
+          if (file !== selectedFile.value || diffInFlight === undefined) {
+            void showDiff(file, id, file === selectedFile.value && diffReady);
+          }
+        } else {
           ++diffSequence;
           selectedFile.value = null;
           diffCode.value = "";
@@ -2067,7 +2081,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                         aria-label={"Git workbench"}
                         className={cn("workbench-main")}
                       >
-                        <div className={cn("workbench-header")}>
+                        <div className={cn("workbench-header", activeTab.value === "changes" && "changes-header")}>
                           <div className={cn("page-heading workbench-heading")}>
                             <div>
                               <Button
@@ -2160,47 +2174,53 @@ function createView(lifecycle: Lifecycle<Props>) {
                                   data-tour="sync"
                                   className="repo-sync-buttons"
                                 >
-                                  {details.value.saved_changes.length ? (
-                                    <>
-                                      <ShadcnButton
-                                        variant="outline"
-                                        disabled={working.value}
-                                        onClick={() =>
-                                          (showSavedChanges.value = true)
-                                        }
-                                      >
-                                        {"Saved changes ("}
-                                        {details.value.saved_changes.length}
-                                        {")"}
-                                      </ShadcnButton>
-                                    </>
-                                  ) : null}
-                                  {canStash.value ? (
-                                    <>
-                                      <ShadcnButton
-                                        variant="outline"
-                                        onClick={() => runGit("stash_changes")}
-                                      >
-                                        {"Stash changes"}
-                                      </ShadcnButton>
-                                    </>
-                                  ) : null}
+                                  {(() => {
+                                    const actions = [
+                                      ...(details.value.saved_changes.length ? [{
+                                        label: `Saved changes (${details.value.saved_changes.length})`,
+                                        disabled: working.value,
+                                        select: () => (showSavedChanges.value = true),
+                                      }] : []),
+                                      ...(canStash.value ? [{
+                                        label: "Stash changes",
+                                        disabled: false,
+                                        select: () => runGit("stash_changes"),
+                                      }] : []),
+                                      ...(syncAction.value && syncAction.value.action !== "fetch" ? [{
+                                        label: "Fetch",
+                                        disabled: !canFetch.value,
+                                        select: () => runGit("fetch"),
+                                      }] : []),
+                                    ];
+                                    if (activeTab.value !== "changes") {
+                                      return actions.map(({ label, disabled, select }) => (
+                                        <ShadcnButton key={label} variant="outline" disabled={disabled} onClick={select}>
+                                          {label === "Fetch" && <RefreshCw size={14} />}
+                                          {label}
+                                        </ShadcnButton>
+                                      ));
+                                    }
+                                    if (!actions.length) return null;
+                                    return (
+                                      <Popover>
+                                        <PopoverTrigger asChild>
+                                          <ShadcnButton variant="ghost">More actions</ShadcnButton>
+                                        </PopoverTrigger>
+                                        <PopoverContent align="end" className="changes-actions" aria-label="More branch actions">
+                                          {actions.map(({ label, disabled, select }) => (
+                                            <PopoverClose key={label} asChild>
+                                              <ShadcnButton variant="ghost" disabled={disabled} onClick={select}>
+                                                {label}
+                                              </ShadcnButton>
+                                            </PopoverClose>
+                                          ))}
+                                        </PopoverContent>
+                                      </Popover>
+                                    );
+                                  })()}
                                   {syncAction.value ? (
-                                    <>
-                                      {syncAction.value.action !== "fetch" ? (
-                                        <>
-                                          <ShadcnButton
-                                            variant="outline"
-                                            disabled={!canFetch.value}
-                                            onClick={() => runGit("fetch")}
-                                          >
-                                            <RefreshCw size={14} />
-                                            {" Fetch"}
-                                          </ShadcnButton>
-                                        </>
-                                      ) : null}
                                       <ShadcnButton
-                                        variant="default"
+                                        variant={activeTab.value === "changes" && currentRepo.dirty ? "outline" : "default"}
                                         disabled={!canFetch.value}
                                         onClick={() =>
                                           confirmGit(syncAction.value!.action)
@@ -2209,7 +2229,6 @@ function createView(lifecycle: Lifecycle<Props>) {
                                         <syncAction.value.icon size={14} />{" "}
                                         {syncAction.value.label}
                                       </ShadcnButton>
-                                    </>
                                   ) : null}
                                 </div>
                               </>
@@ -2446,7 +2465,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                 <>
                                   {activeTab.value === "changes" ? (
                                     <>
-                                      <Tabs.Content value={"changes"}>
+                                      <Tabs.Content value={"changes"} className="changes-tab">
                                         <div
                                           className={cn("changes-workbench")}
                                         >
@@ -2790,6 +2809,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                                     {diffCode.value ? (
                                                       <>
                                                         <DiffView
+                                                          key={JSON.stringify([currentRepo.id, selectedFile.value])}
                                                           code={diffCode.value}
                                                           label={"Git diff"}
                                                         />
@@ -3358,36 +3378,26 @@ function createView(lifecycle: Lifecycle<Props>) {
                                 </>
                               )}
                             </Card>
-                            <Card className={cn("panel walkthrough-settings")}>
-                              <div>
-                                <strong>{"A quick tour"}</strong>
-                                <p>
-                                  {"Revisit the basics whenever you need them."}
-                                </p>
-                              </div>
-                              <Button
-                                variant={"secondary"}
-                                onClick={() => (showWalkthrough.value = true)}
-                              >
-                                {"Open walkthrough"}
-                              </Button>
-                            </Card>
-                            <Card className={cn("panel walkthrough-settings")}>
-                              <div>
-                                <strong data-tour="logs">Live logs</strong>
-                                <p>
-                                  {
-                                    "View runtime activity, Git diagnostics, and error details."
-                                  }
-                                </p>
-                              </div>
-                              <Button
-                                variant={"secondary"}
-                                onClick={() => (showLiveLogs.value = true)}
-                              >
-                                {"Open live logs"}
-                              </Button>
-                            </Card>
+                            <div className="settings-tools">
+                              <Card className="panel walkthrough-settings">
+                                <div>
+                                  <strong>A quick tour</strong>
+                                  <p>Revisit the basics whenever you need them.</p>
+                                </div>
+                                <Button variant="secondary" onClick={() => (showWalkthrough.value = true)}>
+                                  Open walkthrough
+                                </Button>
+                              </Card>
+                              <Card className="panel walkthrough-settings">
+                                <div>
+                                  <strong data-tour="logs">Live logs</strong>
+                                  <p>View runtime activity, Git diagnostics, and error details.</p>
+                                </div>
+                                <Button variant="secondary" onClick={() => (showLiveLogs.value = true)}>
+                                  Open live logs
+                                </Button>
+                              </Card>
+                            </div>
                           </Tabs.Content>
                           <Tabs.Content value="accounts" className="settings-panels">
                             <AccountsSettings
@@ -3537,43 +3547,22 @@ function createView(lifecycle: Lifecycle<Props>) {
                                     </>
                                   )}
                                   <div className={cn("shelf-tools")}>
-                                    <div
-                                      aria-label={"Filter by collection"}
-                                      className={cn("collection-chips")}
-                                    >
-                                      <Button
-                                        onClick={() => (view.value = "all")}
-                                        className={cn([
-                                          {
-                                            "chip-active": view.value === "all",
-                                          },
-                                        ])}
-                                      >
-                                        {"All"}
-                                      </Button>
-                                      {(() => {
-                                        const entries = collections.value;
-                                        return entries.map((c, index) => (
-                                          <Fragment key={index}>
-                                            <Button
-                                              onClick={() =>
-                                                (view.value = "collection:" + c)
-                                              }
-                                              className={cn([
-                                                {
-                                                  "chip-active":
-                                                    view.value ===
-                                                    "collection:" + c,
-                                                },
-                                              ])}
-                                            >
-                                              <Folder size={13} />
-                                              {c}
-                                            </Button>
-                                          </Fragment>
-                                        ));
-                                      })()}
-                                    </div>
+                                    {view.value === "all" && (
+                                      <ToggleGroup
+                                        label="Overview view"
+                                        value={overviewMode.value}
+                                        options={[
+                                          { value: "all", label: "All" },
+                                          { value: "collections", label: "Collections", disabled: !collections.value.length },
+                                        ]}
+                                        onchange={(value) => {
+                                          if (value === "collections" && !collections.value.length) return;
+                                          overviewChoice.value = value === "collections" ? "collections" : "all";
+                                          query.value = "";
+                                        }}
+                                        className="collection-chips overview-view-toggle"
+                                      />
+                                    )}
                                     <div className={cn("shelf-search-tools")}>
                                       <div
                                         className={cn(
@@ -3586,8 +3575,8 @@ function createView(lifecycle: Lifecycle<Props>) {
                                           ref={(node) => {
                                             if (node) searchInput.value = node;
                                           }}
-                                          aria-label={"Search repositories"}
-                                          placeholder={"Search repositories"}
+                                          aria-label={showCollectionShelf.value ? "Search collections" : "Search repositories"}
+                                          placeholder={showCollectionShelf.value ? "Search collections" : "Search repositories"}
                                           value={query.value}
                                           onValueChange={(next) => {
                                             query.value = next;
@@ -3597,6 +3586,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                           {"Ctrl K"}
                                         </kbd>
                                       </div>
+                                      {!showCollectionShelf.value && (
                                       <ToggleGroup
                                         label={"Repository layout"}
                                         value={shelfLayout.value}
@@ -3620,17 +3610,39 @@ function createView(lifecycle: Lifecycle<Props>) {
                                           </>
                                         )}
                                       />
+                                      )}
                                     </div>
                                   </div>
-                                  <div className={cn("shelf-count")}>
-                                    {visible.value.length}{" "}
-                                    {visible.value.length === 1
-                                      ? "repository"
-                                      : "repositories"}
+                                  <div className="shelf-count">
+                                    {showCollectionShelf.value
+                                      ? `${collectionShelf.value.length} ${collectionShelf.value.length === 1 ? "collection" : "collections"}`
+                                      : `${visible.value.length} ${visible.value.length === 1 ? "repository" : "repositories"}`}
                                   </div>
                                   {view.value === "all" && (
                                     <div className="overview-latest">{latestActivity()}</div>
                                   )}
+                                  {showCollectionShelf.value ? (
+                                    <section aria-label="Collections" className="overview-collections">
+                                      {collectionShelf.value.map(([name, count]) => (
+                                        <Card key={name} className="overview-collection-card">
+                                          <Button
+                                            onClick={() => {
+                                              query.value = "";
+                                              view.value = "collection:" + name;
+                                            }}
+                                          >
+                                            <Folder size={18} />
+                                            <span>
+                                              <strong>{name}</strong>
+                                              <small>{count} {count === 1 ? "repository" : "repositories"}</small>
+                                            </span>
+                                          </Button>
+                                        </Card>
+                                      ))}
+                                      {!collectionShelf.value.length && <p className="empty-small">No collections match your search.</p>}
+                                    </section>
+                                  ) : (
+                                    <>
                                   <div
                                     aria-label={"Repositories"}
                                     className={cn(
@@ -4188,6 +4200,8 @@ function createView(lifecycle: Lifecycle<Props>) {
                                       </div>
                                     </>
                                   ) : null}
+                                    </>
+                                  )}
                                   {view.value !== "all" && latestActivity()}
                                 </>
                               );

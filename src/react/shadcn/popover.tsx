@@ -75,7 +75,9 @@ function PopoverDescription({
   );
 }
 
+const PopoverClose = PopoverPrimitive.Close;
+
 export {
-Popover,PopoverAnchor,PopoverContent,PopoverDescription,PopoverHeader,
+Popover,PopoverClose,PopoverAnchor,PopoverContent,PopoverDescription,PopoverHeader,
 PopoverTitle,PopoverTrigger
 };

@@ -98,3 +98,229 @@
 .collection-menu-expand[data-state="open"] svg { transform: rotate(90deg); }
 .sidebar .collection-menu-projects button { width: 100%; height: auto; min-height: 30px; justify-content: flex-start; }
 .collection-menu-projects button > span { min-width: 0; }
+.changes-header .repo-command-bar [data-slot="button"] {
+  box-shadow: none;
+}
+
+.changes-header .repo-command-bar [data-variant="outline"] {
+  background: transparent;
+  border-color: var(--border);
+}
+
+.changes-actions[data-slot="popover-content"] {
+  display: grid;
+  width: max-content;
+  min-width: 160px;
+  gap: 2px;
+  padding: 4px;
+}
+
+.changes-actions [data-slot="button"] {
+  justify-content: flex-start;
+  box-shadow: none;
+}
+
+:is(.changes-tab, .history-workbench) {
+  --workbench-preview-height: clamp(230px, 42vh, 470px);
+}
+
+.changes-tab .changes-workbench {
+  gap: 8px;
+}
+
+:is(.changes-tab, .history-workbench) :is(.panel, .workbench-commit) {
+  background: var(--background);
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+
+:is(.changes-tab, .history-workbench) .panel-title {
+  min-height: 42px;
+  padding: 6px 12px;
+}
+
+.changes-tab :is(.file-search, .changed-file, .text-action, .workbench-commit textarea, .workbench-commit .toolbar button) {
+  box-shadow: none;
+}
+
+:is(.changes-tab, .history-workbench) .file-list {
+  max-height: var(--workbench-preview-height);
+  overflow-anchor: none;
+}
+
+:is(.changes-tab, .history-workbench) .changed-file {
+  min-height: 36px;
+  border: 0;
+  background: transparent;
+}
+
+:is(.changes-tab, .history-workbench) .changed-file:hover {
+  background: var(--muted);
+}
+
+:is(.changes-tab, .history-workbench) .changed-file.file-selected {
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+  color: var(--foreground);
+}
+
+:is(.changes-tab, .history-workbench) .diff-panel :is(.diff-code, .diff-empty) {
+  flex: none;
+  min-height: 0;
+  max-height: none;
+  height: var(--workbench-preview-height);
+}
+
+:is(.changes-tab, .history-workbench) .diff-panel .diff-code {
+  border-radius: 0;
+  overflow-anchor: none;
+  scrollbar-gutter: stable;
+}
+
+.changes-tab .workbench-commit textarea {
+  border: 1px solid var(--border);
+  background: var(--background);
+}
+
+.history-workbench,
+.history-workbench .history-files-and-diff {
+  gap: 8px;
+}
+
+.history-workbench .commit-summary {
+  margin-bottom: 8px;
+  padding: 14px;
+}
+
+.history-workbench :is(.history-search, .changed-file, [data-slot="button"]) {
+  box-shadow: none;
+}
+
+.history-workbench .commit-list {
+  padding: 4px;
+}
+
+.history-workbench .commit-list .commit-choice {
+  border: 0;
+  background: transparent;
+}
+
+.history-workbench .commit-list .commit-choice:hover,
+.activity-feed .activity-row:hover {
+  background: var(--muted);
+}
+
+.history-workbench .commit-list .commit-choice.is-selected,
+.activity-feed .activity-row[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+}
+
+.activity-feed .activity-day ul {
+  background: var(--background);
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+
+.activity-feed .activity-day li + li {
+  border-color: var(--border);
+}
+
+.activity-feed .activity-row,
+.activity-feed .activity-icon,
+.activity-feed .activity-details [data-slot="button"],
+.activity-feed .activity-filter select {
+  box-shadow: none;
+}
+
+.activity-feed .activity-icon,
+.activity-feed .activity-kind {
+  background: transparent;
+  border: 0;
+  color: var(--muted-foreground);
+}
+
+.activity-feed .activity-day :is(h2, time),
+.activity-feed .activity-filter label {
+  color: var(--muted-foreground);
+}
+
+.settings-tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  gap: 12px;
+}
+
+.settings-tools .walkthrough-settings {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0;
+}
+
+.settings-tools .walkthrough-settings p {
+  color: var(--foreground);
+}
+
+.overview-view-toggle {
+  flex: 0 0 auto;
+}
+
+.overview-view-toggle button[data-state="on"] {
+  background: linear-gradient(145deg, #7561ac, #5b4b89);
+  border-color: #ae92ea66;
+  color: #f5edff;
+}
+
+:root[data-theme-custom] .overview-view-toggle button[data-state="on"] {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.overview-collections {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
+  gap: 12px;
+}
+
+.overview-collection-card {
+  min-width: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--background);
+  box-shadow: none;
+}
+
+.overview-collection-card button {
+  width: 100%;
+  height: auto;
+  min-height: 64px;
+  justify-content: flex-start;
+  padding: 12px;
+  text-align: left;
+}
+
+.overview-collection-card button > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.overview-collection-card small {
+  color: var(--muted-foreground);
+}
+
+:is(.changes-header, .changes-actions, .changes-tab, .history-workbench, .activity-feed,
+    .overview-collections, .overview-view-toggle)
+  :is(button, input, select, textarea):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+:is(.changes-tab, .history-workbench) .diff-code:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
