@@ -12,26 +12,10 @@
   min-width: 0;
   border-right: 0;
 }
-.workspace-sidebar-provider [data-collapsible="icon"] .sidebar {
-  padding-inline: 8px;
-}
-.workspace-sidebar-provider [data-collapsible="icon"] .brand {
-  padding-inline: 0;
-}
-.workspace-sidebar-provider [data-collapsible="icon"] .brand-title,
-.workspace-sidebar-provider [data-collapsible="icon"] .side-section,
-.workspace-sidebar-provider [data-collapsible="icon"] .side-count,
-.workspace-sidebar-provider [data-collapsible="icon"] .muted-sidebar,
-.workspace-sidebar-provider [data-collapsible="icon"] .connection {
-  display: none;
-}
-.workspace-sidebar-provider [data-collapsible="icon"] .sidebar button {
-  font-size: 0;
-}
 .workspace-sidebar-trigger {
   display: none;
 }
-.workspace-sidebar-header { padding: 0; position: relative; }
+.workspace-sidebar-header { padding: 0; }
 .workspace-sidebar-group { padding-inline: 0; }
 .workspace-sidebar-group [data-slot="sidebar-menu"] { gap: 4px; }
 .sidebar [data-sidebar="menu-button"] {
@@ -41,11 +25,6 @@
 .sidebar-bottom > .app-updates {
   justify-content: flex-start;
 }
-.workspace-sidebar-provider [data-collapsible="icon"] [data-sidebar="menu-button"] {
-  justify-content: center;
-}
-.workspace-sidebar-collapse { position: absolute; right: 0; top: 0; }
-[data-collapsible="icon"] .workspace-sidebar-collapse { position: static; margin-inline: auto; }
 .workspace-sidebar .sidebar { background: var(--registry-sidebar, var(--background)); }
 .reponiq-dialog {
   translate: none;
@@ -112,9 +91,6 @@
     font-size: 14px;
     padding-inline: 12px;
   }
-  [data-sidebar="sidebar"][data-mobile="true"] .workspace-sidebar-collapse {
-    display: none;
-  }
 }
 
 .sidebar .collection-menu-item > [data-sidebar="menu-button"] { padding-inline-end: 36px; }
@@ -122,5 +98,3 @@
 .collection-menu-expand[data-state="open"] svg { transform: rotate(90deg); }
 .sidebar .collection-menu-projects button { width: 100%; height: auto; min-height: 30px; justify-content: flex-start; }
 .collection-menu-projects button > span { min-width: 0; }
-[data-collapsible="icon"] .sidebar .collection-menu-item > [data-sidebar="menu-button"] { padding-inline-end: 0; }
-[data-collapsible="icon"] .sidebar :is(.collection-menu-expand, .collection-menu-projects, .collection-menu-item > [data-sidebar="menu-button"] > span) { display: none; }

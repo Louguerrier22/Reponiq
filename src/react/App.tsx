@@ -95,7 +95,6 @@ import {
   SidebarGroup,
   SidebarHeader,
   SidebarMenu,
-  SidebarTrigger,
 } from "./shadcn/sidebar";
 import {
   Alert,
@@ -1810,10 +1809,6 @@ function createView(lifecycle: Lifecycle<Props>) {
                     <div className={cn("brand-title")}>{"Reponiq"}</div>
                   </div>
                 </div>
-                <SidebarTrigger
-                  className="workspace-sidebar-collapse"
-                  aria-label="Toggle workspace sidebar"
-                />
               </SidebarHeader>
               <SidebarGroup className="workspace-sidebar-group">
                 <div className={cn("side-section")}>{"WORKSPACE"}</div>
