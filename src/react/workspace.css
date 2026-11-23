@@ -57,7 +57,7 @@
 .repository-card .card-heading .card-open {
   justify-content: flex-start;
 }
-@media (max-width: 767px) {
+@media (max-width: 900px) {
   .workspace-sidebar-trigger {
     display: inline-flex;
     position: fixed;
