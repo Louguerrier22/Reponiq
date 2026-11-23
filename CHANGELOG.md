@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.3
+
+- Compact windows switch directly to a retractable sidebar with full navigation.
+
 ## 1.2.2
 
 - Overview shows collection cards by default when collections exist. Switch to All to see every repository, including unassigned repositories.

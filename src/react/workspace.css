@@ -57,7 +57,7 @@
 .repository-card .card-heading .card-open {
   justify-content: flex-start;
 }
-@media (max-width: 767px) {
+@media (max-width: 900px) {
   .workspace-sidebar-trigger {
     display: inline-flex;
     position: fixed;
@@ -87,8 +87,9 @@
   [data-sidebar="sidebar"][data-mobile="true"] .side-head {
     justify-content: space-between;
   }
-  [data-sidebar="sidebar"][data-mobile="true"] .app-updates {
+  [data-sidebar="sidebar"][data-mobile="true"] .sidebar-bottom > button {
     font-size: 14px;
+    justify-content: flex-start;
     padding-inline: 12px;
   }
 }
