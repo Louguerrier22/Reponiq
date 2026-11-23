@@ -203,7 +203,7 @@ export function Collapsible({
   );
 }
 
-type ToggleOption = { value: string; label: string };
+type ToggleOption = { value: string; label: string; disabled?: boolean };
 export function ToggleGroup({
   label,
   options,
@@ -238,6 +238,7 @@ export function ToggleGroup({
         <ToggleGroupItem
           key={option.value}
           value={option.value}
+          disabled={option.disabled}
           aria-label={option.label}
           title={option.label}
           className="text-muted-foreground data-[state=on]:bg-primary/15 data-[state=on]:text-primary"
