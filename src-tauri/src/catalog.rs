@@ -667,9 +667,23 @@ pub async fn create_repository(
             let mut attached=repo.clone();
             match background(state,move|s|{
                 let _guard=super::gitflow::MUTATIONS.lock().map_err(err)?;
+                let mut db = s.database.lock().map_err(err)?;
+                let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(err)?;
+                let registration = super::workflow::Target {
+                    id,
+                    path: attached.path.clone(),
+                    registration: attached.registration.clone(),
+                };
+                if !registration.is_current_registration(&tx)? {
+                    return Err("The repository registration changed before GitHub setup finished.".into());
+                }
                 target.ensure_current()?;
                 target.git(&["remote","add","origin",&url])?;
-                s.database.lock().map_err(err)?.execute("UPDATE repos SET remote_url=?1 WHERE id=?2",rusqlite::params![url,id]).map_err(err)?;
+                let changed = tx.execute("UPDATE repos SET remote_url=?1 WHERE id=?2",rusqlite::params![url,id]).map_err(err)?;
+                if changed != 1 {
+                    return Err("The repository registration changed before GitHub setup finished.".into());
+                }
+                tx.commit().map_err(err)?;
                 attached.github_full_name=super::full_name(&url);attached.remote_url=Some(url);Ok(attached)
             }).await {
                 Ok(repo)=>Ok(Created{repo,warning:None}),
