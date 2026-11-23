@@ -2,7 +2,7 @@
 
 [Documentation](README.md) · [Install](INSTALLATION.md) · [Troubleshooting](TROUBLESHOOTING.md)
 
-First launch takes you through Appearance, Workspace, GitHub, Startup, and Review. You can continue without GitHub and start with an empty workspace. The guide after setup is optional. Replay it from **Settings → General → Open walkthrough**.
+First launch takes you through Appearance, Workspace, GitHub, Startup, and Review. You can continue without GitHub and start with an empty workspace. The optional guide covers adding a repository, branching, committing, and syncing. Replay it from **Settings → General → Open walkthrough**.
 
 ## Repositories and organization
 
@@ -10,13 +10,13 @@ Choose **Add repository** and select one of three paths.
 
 **Add from folder** opens an existing local repository. Browse uses the operating system's folder dialog; cancel preserves the field. Registration does not move or upload code.
 
-**Clone** offers **GitHub accounts** and **Repository URL**. Expand an account and choose a repository, or paste an HTTPS or SSH clone URL from any Git host. URL cloning works without connecting an account and suggests the local folder name. Choose a parent folder and local folder name, then clone. Account lists are paged at 25 items; search filters the current page. Public repositories selected from the account list clone without authentication; private repositories use that selected GitHub account. URL cloning uses system Git credentials or your SSH key. Existing destination folders are refused. Clones can run for up to 15 minutes. Failed clones preserve partial files; inspect that folder before retrying with a new folder name.
+**Clone** offers **GitHub accounts** and **Repository URL**. Expand an account and choose a repository. Already added repositories have a text label and follow available repositories in search results. Hover over the globe or lock to check visibility. You can also paste an HTTPS or SSH clone URL from any Git host. URL cloning works without connecting an account and suggests the local folder name. Choose a parent folder and local folder name, then clone. Browsing shows 25 repositories per page. Search checks all repositories available to the selected account before showing matches. Public repositories selected from the account list clone without authentication; private repositories use that selected GitHub account. URL cloning uses system Git credentials or your SSH key. Existing destination folders are refused. Clones can run for up to 15 minutes. Failed clones preserve partial files; inspect that folder before retrying with a new folder name.
 
 **Create** starts an empty local repository on main. Choose Local only, or a connected GitHub account and an available personal/organization owner. GitHub creation defaults to Private and creates an empty remote; it does not upload source or push a commit. Organization policy and token permissions remain authoritative. Choose a new folder name inside an existing parent folder. If remote setup fails after local creation, the local repository stays registered and the app reports the partial result. Check GitHub before retrying remote creation.
 
 Git operations use installed Git and its existing authentication for any configured host. Online account catalogs and remote creation currently support GitHub.com only.
 
-Enter a tag and press Enter to make a removable chip. Use the sidebar **+** to choose a repository and collection, or use **Organize** from the workbench. Switch between grid and rows next to search. Opening a repository shows one focused workbench; All repositories returns to the shelf.
+Enter a tag and press Enter to make a removable chip. Use the sidebar **+** to start a collection and check one or more repositories. Use **Add to collection** inside an existing collection or **Organize** from the workbench. A repository belongs to one collection at a time. Switch between grid and rows next to search. Grid fits up to five cards across, and collection rows fit up to three as space allows. Expand a collection in the sidebar to see five projects. **Show more** reveals another five, and collapsing the collection resets the list. Opening a repository shows one focused workbench; All repositories returns to the shelf.
 
 Provider badges identify recognized hosts. Self-hosted detection is a display hint, never a credential-routing rule. GitLab and some other hosts use a neutral icon with the provider name because bundled branded artwork is not licensed for this use.
 
@@ -66,7 +66,9 @@ When a merge, rebase, cherry-pick or revert pauses, resolve each conflicted file
 
 ## GitHub connection and pull requests
 
-Open **Settings → GitHub accounts → Connect account** for browser sign-in. Start, open GitHub, enter/confirm the displayed device code there, and authorize the requested access. Cancel stops this pending connection. Public repository access uses public_repo and read:org; private access requests the broader repo scope plus read:org. These scopes permit repository/PR writes and reading organization membership. Use a fine-grained PAT restricted to selected repositories instead when appropriate: Actions Read for monitoring, Pull requests Read/Write for reviews/creation, and Contents Read/Write for merge as required by GitHub. Organization policy may require separate approval.
+In **Settings → Accounts**, pick GitHub and select a connected account before syncing workflows or disconnecting it. The other listed hosts use Git credentials or SSH keys through the repository URL.
+
+Open **Settings → Accounts → Connect GitHub** for browser sign-in. Start, open GitHub, enter/confirm the displayed device code there, and authorize the requested access. Cancel stops this pending connection. Public repository access uses public_repo and read:org; private access requests the broader repo scope plus read:org. These scopes permit repository/PR writes and reading organization membership. Use a fine-grained PAT restricted to selected repositories instead when appropriate: Actions Read for monitoring, Pull requests Read/Write for reviews/creation, and Contents Read/Write for merge as required by GitHub. Organization policy may require separate approval.
 
 Credentials remain in the OS credential store. Browser access tokens refresh natively; no client secret is bundled. Disconnect deletes local credentials; revoke access in GitHub settings to revoke the remote authorization too. GitHub.com is the only account/API host supported.
 
@@ -85,6 +87,8 @@ Under **Settings → General → Startup**, enable **Fetch on launch** and choos
 Startup fetch uses your existing Git credentials. Use **Retry fetch** if it fails. **Start Reponiq at sign-in** opens the app on your next OS sign-in. If you move an AppImage, reopen it at the new location and enable sign-in startup there again.
 
 ## Activity, storage and keyboard
+
+Open **Activity** in the sidebar for workspace events or in a repository for its Git events and workflow runs. Selecting an event in **Latest activity** opens it in Reponiq. Select a workflow run and choose **Open in browser** to view it on GitHub.
 
 Sync GitHub manually retrieves recent Actions runs. The saved shelf loads before Git status checks, and local status updates while the window is visible or regains focus. Ctrl+K opens the repo switcher from the shelf or workbench. Use the arrow keys and Enter to open a repo, or use **Move up/down** to arrange pins. Open the selected repo in your editor, terminal, or file manager from the switcher or **Repository actions**. Choose an app-wide editor in Workflow defaults, or override it per repo. Escape dismisses regular dialogs. Finish the setup steps to leave first-run setup.
 

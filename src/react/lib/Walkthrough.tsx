@@ -12,59 +12,24 @@ import { cn } from "../utils";
 import Modal from "./Modal";
 const steps = [
   {
-    title: "Open a repository",
-    body: "Use Add repository to create, clone, or add an existing folder. Use Import to add several at once.",
+    title: "Add a repository",
+    body: "Use Add repository to create, clone, or open a folder. Use Import from… to add several existing repositories.",
     target: "add",
   },
   {
-    title: "Find and organize your work",
-    body: "Search by name, branch, tag, or collection. Pin frequent repositories or switch between grid and row views.",
-    target: "search",
-  },
-  {
-    title: "Group related repositories",
-    body: "Use the plus beside Collections, then choose a repository and a collection.",
-    target: "collections",
-  },
-  {
-    title: "Work on a branch",
-    body: "Open the branch control to create or switch branches. Use Stash changes to set work aside, then Saved changes to bring it back.",
+    title: "Choose a branch",
+    body: "Select the current branch to switch or create a branch.",
     target: "branches",
   },
   {
-    title: "Fetch, pull, and push",
-    body: "Fetch checks for remote changes. Pull brings them into your current branch. Push sends your commits to the remote.",
-    target: "sync",
-  },
-  {
     title: "Review and commit",
-    body: "Open a file to review its diff. With no files checked, Commit uses all changes. Switch between Exclude checked and Include checked to choose files.",
+    body: "Select a file to review its changes. Write a commit message and commit. With no files checked, all changes are included.",
     target: "commit",
   },
   {
-    title: "Look back at a change",
-    body: "Open History to inspect earlier commits and their diffs. Open Activity history in the sidebar for workspace events.",
-    target: "history",
-  },
-  {
-    title: "Connect a GitHub account",
-    body: "Open Settings → GitHub accounts to connect or manage an account.",
-    target: "connect",
-  },
-  {
-    title: "Review pull requests and checks",
-    body: "For a connected GitHub repository, open Pull requests to review changes and checks. Open Workflows to see runs.",
-    target: "pulls",
-  },
-  {
-    title: "Choose what fetches on launch",
-    body: "Set a workspace default and choose repositories in Settings → General → Startup. Use Fetch on launch on a repository page to change its preference.",
-    target: "startup",
-  },
-  {
-    title: "Install an app update",
-    body: "Open App updates from the sidebar. When an update is ready, you can restart from there.",
-    target: "updates",
+    title: "Sync with the remote",
+    body: "Fetch checks for updates. Pull brings remote commits into your branch. Push sends your commits to the remote.",
+    target: "sync",
   },
 ];
 
@@ -175,7 +140,7 @@ function createView(lifecycle: Lifecycle<Props>) {
         walkthrough={true}
       >
         {ring.value && (
-          <div aria-hidden="true" className="tour-ring" style={ring.value} />
+          <div aria-hidden="true" className="tour-ring" style={{ ...ring.value }} />
         )}
         <section
           ref={(node) => { tourCard = node; }}

@@ -494,16 +494,25 @@ pub async fn clone_repository_url(
 pub async fn list_online_repos(
     account_id: i64,
     page: u32,
+    catalog: Option<bool>,
     state: tauri::State<'_, State>,
 ) -> Result<Page<OnlineRepo>, String> {
     page_valid(page)?;
     let _guard = oauth::lock_account().await?;
     let api = api(account_id, state).await?;
     api.user().await?;
+    let (per_page, sort, direction) = if catalog == Some(true) {
+        // Ordinary repository updates must not move rows between search pages.
+        (100, "full_name", "asc")
+    } else {
+        (25, "updated", "desc")
+    };
     let (items, has_more) = api
         .request(
             reqwest::Method::GET,
-            &format!("/user/repos?per_page=25&page={page}&sort=updated&direction=desc"),
+            &format!(
+                "/user/repos?per_page={per_page}&page={page}&sort={sort}&direction={direction}"
+            ),
             None,
         )
         .await?;

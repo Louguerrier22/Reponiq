@@ -1,6 +1,6 @@
 export type Platform = 'github' | 'gitlab' | 'bitbucket' | 'azure' | 'codeberg' | 'gitea' | 'forgejo' | 'sourcehut' | 'git' | 'local';
 export type RemoteInfo = { platform: Platform; label: string; host: string; project: string };
-const labels: Record<Platform, string> = { github:'GitHub',gitlab:'GitLab',bitbucket:'Bitbucket',azure:'Azure DevOps',codeberg:'Codeberg',gitea:'Gitea',forgejo:'Forgejo',sourcehut:'SourceHut',git:'Git',local:'Local repository' };
+export const platformLabels: Record<Platform, string> = { github:'GitHub',gitlab:'GitLab',bitbucket:'Bitbucket',azure:'Azure DevOps',codeberg:'Codeberg',gitea:'Gitea',forgejo:'Forgejo',sourcehut:'SourceHut',git:'Git',local:'Local repository' };
 
 // Display hints only. Host detection never selects an API endpoint or credential.
 export function remoteInfo(remote: string | null): RemoteInfo {
@@ -27,5 +27,5 @@ export function remoteInfo(remote: string | null): RemoteInfo {
   else if(host==='gitea.com'||prefix==='gitea')platform='gitea';
   else if(prefix==='forgejo')platform='forgejo';
   else if(host==='git.sr.ht'||host==='sr.ht')platform='sourcehut';
-  return {platform,label:labels[platform],host,project};
+  return {platform,label:platformLabels[platform],host,project};
 }

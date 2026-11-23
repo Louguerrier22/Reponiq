@@ -106,6 +106,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                   details.value.git.branch === "(detached)"
                 }
                 onClick={() => switchTarget("stash")}
+                title="Set your changes aside. Restore them later from Saved changes."
               >
                 {"Stash and switch"}
               </Button>
@@ -113,6 +114,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                 variant={"secondary"}
                 disabled={busy.value || blocked.value}
                 onClick={() => switchTarget("bring")}
+                title="Carry your current edits into the destination branch."
               >
                 {"Switch with changes"}
               </Button>

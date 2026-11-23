@@ -103,6 +103,7 @@ struct Activity {
     kind: String,
     title: String,
     detail: Option<String>,
+    can_open_in_browser: bool,
     occurred_at: i64,
 }
 #[derive(Serialize)]
@@ -1197,18 +1198,69 @@ fn git_action_impl(
     }
     Ok(output)
 }
+fn workflow_run_url(raw: &str) -> Option<url::Url> {
+    let url = url::Url::parse(raw).ok()?;
+    if url.scheme() != "https"
+        || url.host_str() != Some("github.com")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    let segments: Vec<_> = url.path_segments()?.take(6).collect();
+    let [owner, repo, "actions", "runs", run] = segments.as_slice() else {
+        return None;
+    };
+    let valid_name = |part: &str| {
+        !matches!(part, "" | "." | "..")
+            && part
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+    };
+    (valid_name(owner)
+        && valid_name(repo)
+        && run.bytes().all(|byte| byte.is_ascii_digit())
+        && run.parse::<u64>().is_ok_and(|id| id > 0))
+    .then_some(url)
+}
+
+#[cfg(test)]
+#[test]
+fn workflow_run_url_only_accepts_github_workflow_runs() {
+    let valid = "https://github.com/owner/repo/actions/runs/123";
+    assert_eq!(workflow_run_url(valid).unwrap().as_str(), valid);
+    for invalid in [
+        "https://example.com/owner/repo/actions/runs/123",
+        "http://github.com/owner/repo/actions/runs/123",
+        "https://github.com/owner/repo/actions/runs/123?tab=overview",
+        "https://github.com/owner/repo/actions/runs/123/extra",
+        "https://github.com/owner/repo/actions/runs/not-a-number",
+        "https://github.com/owner/repo/issues/123",
+    ] {
+        assert!(workflow_run_url(invalid).is_none(), "{invalid}");
+    }
+}
+
 fn get_activity_impl(state: &State) -> Result<Vec<Activity>, String> {
     let db = state.database.lock().map_err(err)?;
     let mut stmt=db.prepare("SELECT a.id,a.repo_id,r.name,a.kind,a.title,a.detail,a.occurred_at FROM activity a LEFT JOIN repos r ON r.id=a.repo_id ORDER BY a.occurred_at DESC,a.id DESC LIMIT 250").map_err(err)?;
     let rows = stmt
         .query_map([], |r| {
+            let kind: String = r.get(3)?;
+            let detail: Option<String> = r.get(5)?;
+            let can_open_in_browser =
+                kind == "ci" && detail.as_deref().and_then(workflow_run_url).is_some();
             Ok(Activity {
                 id: r.get(0)?,
                 repo_id: r.get(1)?,
                 repo_name: r.get(2)?,
-                kind: r.get(3)?,
+                kind,
                 title: r.get(4)?,
-                detail: r.get(5)?,
+                detail,
+                can_open_in_browser,
                 occurred_at: r.get(6)?,
             })
         })
@@ -1566,10 +1618,12 @@ pub fn run() {
             remove_repo,
             pin_repo,
             organize_repo,
+            assign_collection,
             refresh_repos,
             repo_details,
             git_action,
             get_activity,
+            open_activity_in_browser,
             list_accounts,
             gitflow::history_page,
             gitflow::commit_details,
@@ -1652,6 +1706,47 @@ mod release_tests {
             .unwrap();
         assert!(result.status.success());
         dir
+    }
+    #[test]
+    fn assigning_a_collection_is_atomic_and_preserves_existing_tags() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = initialize(&dir.path().join("test.sqlite")).unwrap();
+        db.execute(
+            "INSERT INTO repos(id,path,name,collection,tags) VALUES(1,'one','One','Old',?1),(2,'two','Two',NULL,'[]')",
+            [r#"["urgent"]"#],
+        )
+        .unwrap();
+        let mut targets = [
+            workflow::Target {
+                id: 1,
+                path: "one".into(),
+                registration: None,
+            },
+            workflow::Target {
+                id: 2,
+                path: "stale".into(),
+                registration: None,
+            },
+        ];
+        let first = |db: &Connection| {
+            db.query_row("SELECT collection,tags FROM repos WHERE id=1", [], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+        };
+        assert!(assign_collection_impl(&mut db, &targets, "New").is_err());
+        assert_eq!(first(&db), ("Old".into(), r#"["urgent"]"#.into()));
+        targets[1].path = "two".into();
+        assign_collection_impl(&mut db, &targets, " New ").unwrap();
+        assert_eq!(first(&db), ("New".into(), r#"["urgent"]"#.into()));
+        let count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM repos WHERE collection='New'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
     }
     #[test]
     fn status_tracks_unborn_dirty_and_missing_repositories() {
@@ -2056,6 +2151,39 @@ async fn organize_repo(
     })
     .await
 }
+fn assign_collection_impl(
+    db: &mut Connection,
+    targets: &[workflow::Target],
+    collection: &str,
+) -> Result<(), String> {
+    let name = collection.trim();
+    if name.is_empty() || name.len() > 100 || targets.is_empty() {
+        return Err("Choose repositories and a collection name of up to 100 bytes.".into());
+    }
+    let tx = db.transaction().map_err(err)?;
+    for target in targets {
+        target.verify(&tx)?;
+        tx.execute(
+            "UPDATE repos SET collection=?1 WHERE id=?2",
+            params![name, target.id],
+        )
+        .map_err(err)?;
+    }
+    tx.commit().map_err(err)
+}
+
+#[tauri::command]
+async fn assign_collection(
+    targets: Vec<workflow::Target>,
+    collection: String,
+    state: tauri::State<'_, State>,
+) -> Result<(), String> {
+    background(state, move |state| {
+        let mut db = state.database.lock().map_err(err)?;
+        assign_collection_impl(&mut db, &targets, &collection)
+    })
+    .await
+}
 #[tauri::command]
 async fn refresh_repos(state: tauri::State<'_, State>) -> Result<Vec<Repo>, String> {
     background(state, move |state| refresh_repos_impl(state)).await
@@ -2081,6 +2209,34 @@ async fn git_action(
 #[tauri::command]
 async fn get_activity(state: tauri::State<'_, State>) -> Result<Vec<Activity>, String> {
     background(state, move |state| get_activity_impl(state)).await
+}
+#[tauri::command]
+async fn open_activity_in_browser(
+    app: tauri::AppHandle,
+    id: i64,
+    state: tauri::State<'_, State>,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    background(state, move |state| {
+        let detail: Option<String> = state
+            .database
+            .lock()
+            .map_err(err)?
+            .query_row(
+                "SELECT detail FROM activity WHERE id=?1 AND kind='ci'",
+                [id],
+                |r| r.get(0),
+            )
+            .map_err(|_| "This activity no longer has a GitHub run.")?;
+        let url = detail
+            .as_deref()
+            .and_then(workflow_run_url)
+            .ok_or("This activity has no valid GitHub run link.")?;
+        app.opener()
+            .open_url(url.as_str(), None::<&str>)
+            .map_err(err)
+    })
+    .await
 }
 #[tauri::command]
 async fn list_accounts(state: tauri::State<'_, State>) -> Result<Vec<Account>, String> {

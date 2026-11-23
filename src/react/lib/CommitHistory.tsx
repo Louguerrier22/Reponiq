@@ -167,13 +167,14 @@ function createView(lifecycle: Lifecycle<Props>) {
                   </p>
                 </>
               ) : (
-                entries.map((commit, index) => (
+                entries.map((commit) => (
                   <Fragment key={commit.hash}>
                     <Button
                       onClick={() => {
                         if (selected.value?.hash !== commit.hash)
                           void choose(commit);
                       }}
+                      aria-current={selected.value?.hash === commit.hash ? "true" : undefined}
                       className={cn([
                         "commit-choice",
                         { "is-selected": selected.value?.hash === commit.hash },

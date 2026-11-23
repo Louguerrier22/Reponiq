@@ -43,7 +43,7 @@ import {
 } from "./shadcn/toggle-group";
 import { cn } from "./utils";
 
-export { Badge, Label, SidebarTrigger, Switch, TabsTrigger };
+export { Badge, Label, Switch, TabsTrigger };
 const Badge = ShadcnBadge;
 export const Tabs = { Root: TabsRoot, Content: TabsContent };
 export const TabsList = ShadcnTabsList;
@@ -251,12 +251,12 @@ export function ToggleGroup({
 
 export function Sidebar({ children }: PropsWithChildren) {
   return (
-    <SidebarProvider className="workspace-sidebar-provider">
+    <SidebarProvider className="workspace-sidebar-provider" open keyboardShortcut={false}>
       <SidebarTrigger
         className="workspace-sidebar-trigger"
-        aria-label="Toggle workspace sidebar"
+        aria-label="Open workspace navigation"
       />
-      <ShadcnSidebar className="workspace-sidebar" collapsible="icon">
+      <ShadcnSidebar className="workspace-sidebar">
         <SidebarContent className="sidebar" aria-label="Workspace navigation">
           {children}
         </SidebarContent>

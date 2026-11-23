@@ -289,7 +289,7 @@ function ThemeBrowser({
       <DialogHeader className="theme-browser-header">
         <DialogTitle>Change theme</DialogTitle>
         <DialogDescription>
-          Browse and preview themes for Reponiq.
+          Preview a theme in Light, Dark, or System before applying it.
         </DialogDescription>
       </DialogHeader>
       <div className="theme-browser-toolbar">
