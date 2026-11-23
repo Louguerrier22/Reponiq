@@ -1435,20 +1435,33 @@ async fn sync_account(id: i64, state: tauri::State<'_, State>) -> Result<String,
     validate_host(&host)?;
     let token = oauth::account_token(id, state.clone()).await?;
     let client = gh_client()?;
-    let repos: Vec<(i64, String)> = {
+    let repos = {
         let db = state.database.lock().map_err(err)?;
         let mut stmt = db
-            .prepare("SELECT id,remote_url FROM repos WHERE remote_url IS NOT NULL")
+            .prepare(
+                "SELECT r.id,r.path,w.token,r.remote_url FROM repos r
+                      LEFT JOIN workflow_registrations w ON w.repo_id=r.id
+                      WHERE r.remote_url IS NOT NULL",
+            )
             .map_err(err)?;
         let result = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .query_map([], |r| {
+                Ok((
+                    workflow::Target {
+                        id: r.get(0)?,
+                        path: r.get(1)?,
+                        registration: r.get(2)?,
+                    },
+                    r.get::<_, String>(3)?,
+                ))
+            })
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
         result
     };
     let mut updated = 0;
-    for (repo_id, remote) in repos {
+    for (target, remote) in repos {
         let Some(full) = full_name(&remote) else {
             continue;
         };
@@ -1458,20 +1471,30 @@ async fn sync_account(id: i64, state: tauri::State<'_, State>) -> Result<String,
             response.map_err(|e| format!("Sync stopped after {updated} repositories: {e}"))?;
         let data: WorkflowRuns = response.json().await.map_err(err)?;
         let latest = data.workflow_runs.first();
-        let db = state.database.lock().map_err(err)?;
         if let Some(run) = latest {
-            db.execute(
-                "UPDATE repos SET ci_status=?1,ci_conclusion=?2 WHERE id=?3",
-                params![run.status, run.conclusion, repo_id],
-            )
-            .map_err(err)?;
+            let mut db = state.database.lock().map_err(err)?;
+            let tx = db
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(err)?;
+            if !target.is_current_registration(&tx)? {
+                continue;
+            }
+            let changed = tx
+                .execute(
+                    "UPDATE repos SET ci_status=?1,ci_conclusion=?2 WHERE id=?3 AND remote_url=?4",
+                    params![run.status, run.conclusion, target.id, remote],
+                )
+                .map_err(err)?;
+            if changed != 1 {
+                continue;
+            }
             for item in &data.workflow_runs {
                 let timestamp = chrono::DateTime::parse_from_rfc3339(&item.created_at)
                     .map(|x| x.timestamp())
                     .unwrap_or_else(|_| now());
                 record(
-                    &db,
-                    Some(repo_id),
+                    &tx,
+                    Some(target.id),
                     &format!("github-run:{}", item.id),
                     "ci",
                     &format!(
@@ -1483,6 +1506,7 @@ async fn sync_account(id: i64, state: tauri::State<'_, State>) -> Result<String,
                     timestamp,
                 )?;
             }
+            tx.commit().map_err(err)?;
             updated += 1;
         }
     }

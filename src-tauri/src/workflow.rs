@@ -129,6 +129,17 @@ pub struct Target {
 }
 
 impl Target {
+    pub(super) fn is_current_registration(&self, db: &Connection) -> Result<bool, String> {
+        db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM repos r
+             LEFT JOIN workflow_registrations w ON w.repo_id=r.id
+             WHERE r.id=?1 AND r.path=?2 AND w.token IS ?3)",
+            params![self.id, self.path, self.registration],
+            |row| row.get(0),
+        )
+        .map_err(err)
+    }
+
     pub(super) fn verify(&self, db: &Connection) -> Result<std::path::PathBuf, String> {
         let path = repo_path(db, self.id)?;
         if path != std::path::Path::new(&self.path) {
@@ -608,8 +619,10 @@ mod tests {
             path: "/first".into(),
             registration: registration(&db, 1).unwrap(),
         };
+        assert!(prior.is_current_registration(&db).unwrap());
         db.execute_batch("DELETE FROM repos WHERE id=1; INSERT INTO repos(id,path,name) VALUES(1,'/first','Second');").unwrap();
         assert!(prior.verify(&db).is_err());
+        assert!(!prior.is_current_registration(&db).unwrap());
         assert_eq!(fetch_mode(&db, 1).unwrap(), Override::Inherit);
         assert_eq!(
             db.query_row("SELECT COUNT(*) FROM workflow_drafts", [], |row| row
