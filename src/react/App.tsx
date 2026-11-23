@@ -22,7 +22,6 @@ import {
   RefreshCw,
   Search,
   Settings,
-  ShieldCheck,
   Tags,
   X,
 } from "lucide-react";
@@ -79,7 +78,9 @@ import {
   type Lifecycle,
 } from "./controller";
 import { Github } from "./icons";
-import ActivityHistory from "./lib/ActivityHistory";
+import ActivityHistory, { activityTitle } from "./lib/ActivityHistory";
+import CollectionMenuItem from "./lib/CollectionMenuItem";
+import AccountsSettings from "./lib/AccountsSettings";
 import AppUpdates, { AppUpdateButton } from "./lib/AppUpdates";
 import DiffView from "./lib/DiffView";
 import LocateRepo from "./lib/LocateRepo";
@@ -130,13 +131,13 @@ const ConflictEditor = lazy(() => import("./lib/ConflictEditor"));
 const WorkflowSettings = lazy(() => import("./lib/WorkflowSettings"));
 const StartupSettings = lazy(() => import("./lib/StartupSettings"));
 const AppearanceEditor = lazy(() => import("./lib/AppearanceEditor"));
-const RepositoryPicker = lazy(() => import("./lib/ui/RepositoryPicker"));
 const SetupIdentity = lazy(() => import("./lib/SetupIdentity"));
 type BaseProps = {};
 type Props = BaseProps & {};
 function createView(lifecycle: Lifecycle<Props>) {
   let repos = state<Repo[]>([]);
   let activities = state<ActivityItem[]>([]);
+  const activeActivityId = state<number | null>(null);
   let accounts = state<Account[]>([]);
   let view = state("all");
   const settingsTab = state<"general" | "accounts">("general");
@@ -181,11 +182,7 @@ function createView(lifecycle: Lifecycle<Props>) {
     themeAttributes(theme.value, systemDark.value),
   );
   const setupSteps = ["appearance", "workspace", "accounts", "startup", "review"] as const;
-  const workflowRuns = derived(() =>
-    activities.value.filter(
-      (item) => item.kind === "ci" && item.repo_id === selected.value,
-    ),
-  );
+  const repositoryActivity = derived(() => activities.value.filter((item) => item.repo_id === selected.value));
   let launchFailures = state<Record<number, string>>({}),
     retryingLaunchFetch = state(false);
   let launchBatch = Date.now();
@@ -354,6 +351,9 @@ function createView(lifecycle: Lifecycle<Props>) {
   let addingCollection = state(false);
   let organizationId = state<number | null>(null);
   let collectionName = state("");
+  const existingCollection = state<string | null>(null);
+  const collectionRepos = state(new Set<number>());
+  const collectionQuery = state("");
   let organizationError = state("");
   const organizationRepo = derived(() =>
     repos.value.find((repo) => repo.id === organizationId.value),
@@ -477,7 +477,7 @@ function createView(lifecycle: Lifecycle<Props>) {
   } | null>(null);
   let message = state("");
   let newBranch = state("");
-  let activeTab = state<"changes" | "history" | "pulls" | "workflows">(
+  let activeTab = state<"changes" | "history" | "pulls" | "activity">(
     "changes",
   );
   let actionResult = state("");
@@ -597,21 +597,16 @@ function createView(lifecycle: Lifecycle<Props>) {
     }
     return { action: "fetch", label: "Fetch", icon: RefreshCw };
   });
-  const visible = derived(() =>
-    orderRepos(
-      view.value === "attention"
-        ? filteredRepos(repos.value, query.value, "all").filter(
-            (r) =>
-              r.status_error ||
-              r.dirty ||
-              r.ahead ||
-              r.behind ||
-              launchFailures.value[r.id] ||
-              r.ci_conclusion === "failure",
-          )
-        : filteredRepos(repos.value, query.value, view.value),
-    ),
-  );
+  function shelfRepos(scope: string, search = "") {
+    return scope === "attention"
+      ? filteredRepos(repos.value, search, "all").filter((repo) =>
+          repo.status_error || repo.dirty || repo.ahead || repo.behind ||
+          launchFailures.value[repo.id] || repo.ci_conclusion === "failure",
+        )
+      : filteredRepos(repos.value, search, scope);
+  }
+
+  const visible = derived(() => orderRepos(shelfRepos(view.value, query.value)));
   const fileNeedle = derived(() => fileQuery.value.toLocaleLowerCase());
   const activeSettings = derived(() =>
     current.value ? workflowFor(current.value) : undefined,
@@ -970,13 +965,27 @@ function createView(lifecycle: Lifecycle<Props>) {
       return null;
     }
   }
-  async function selectRepo(id: number) {
+  async function selectRepo(id: number, tab: "changes" | "activity" = "changes") {
     beginSelection(id);
+    activeActivityId.value = null;
+    activeTab.value = tab;
     const repo = repos.value.find((repo) => repo.id === id);
     if (repo) void readRepoContext(repo);
     const result = await readDetails(id);
     if (result && repo) void visit(repo, result.git.branch);
   }
+  function openWorkspaceActivity(id: number | null = null) {
+    selected.value = null;
+    activeActivityId.value = id;
+    view.value = "activity";
+  }
+
+  function openRepositoryActivity(id: number, activityId?: number) {
+    if (selected.value !== id) void selectRepo(id, "activity");
+    else activeTab.value = "activity";
+    activeActivityId.value = activityId ?? activities.value.find((item) => item.repo_id === id && item.kind === "ci")?.id ?? null;
+  }
+
   async function act(
     fn: () => Promise<unknown>,
     msg: string,
@@ -1030,17 +1039,12 @@ function createView(lifecycle: Lifecycle<Props>) {
   async function prepareTour(target: string) {
     const repo = repos.value.find((repo) => repo.id === selected.value && !repo.missing)
       ?? repos.value.find((repo) => !repo.missing);
-    if (repo && ["branches", "sync", "commit", "history", "pulls"].includes(target)) {
+    if (repo && target !== "add") {
       if (selected.value !== repo.id) await selectRepo(repo.id);
-      activeTab.value = target === "history" ? "history" : "changes";
+      activeTab.value = "changes";
     } else {
       selected.value = null;
-      if (target === "connect" || target === "startup") {
-        view.value = "settings";
-        settingsTab.value = target === "connect" ? "accounts" : "general";
-      } else {
-        view.value = target === "activity" ? "activity" : "all";
-      }
+      view.value = "all";
     }
     await tick();
   }
@@ -1152,11 +1156,15 @@ function createView(lifecycle: Lifecycle<Props>) {
       retryingLaunchFetch.value = false;
     }
   }
-  function openOrganization(repo?: Repo) {
+  function openOrganization(repo?: Repo, group?: string) {
     if (working.value) return;
     addingCollection.value = !repo;
     organizationId.value = repo?.id ?? current.value?.id ?? null;
-    collectionName.value = "";
+    existingCollection.value = group ?? null;
+    collectionName.value = group ?? "";
+    collectionQuery.value = "";
+    const currentRepo = current.value;
+    collectionRepos.value = new Set(!repo && currentRepo && !group ? [currentRepo.id] : []);
     organizationError.value = "";
     collection.value = repo?.collection ? [repo.collection] : [];
     tags.value = repo ? [...repo.tags] : [];
@@ -1164,23 +1172,33 @@ function createView(lifecycle: Lifecycle<Props>) {
   }
   async function organize() {
     const repo = organizationRepo.value;
-    const group = addingCollection.value
-      ? collectionName.value.trim()
-      : (collection.value[0] ?? "");
-    if (!repo || organizing.value || (addingCollection.value && !group)) return;
-    const values = addingCollection.value ? [...repo.tags] : [...tags.value];
+    const adding = addingCollection.value;
+    const group = adding ? collectionName.value.trim() : (collection.value[0] ?? "");
+    const chosen = adding ? repos.value.filter((candidate) => collectionRepos.value.has(candidate.id)) : [];
+    if (organizing.value || (adding ? !group || !chosen.length : !repo)) return;
+    const values = [...tags.value];
     organizing.value = true;
     organizationError.value = "";
     try {
-      await api.organize(repo.id, group, values);
+      if (adding) {
+        await api.assignCollection(chosen.map(targetOf), group);
+      } else if (repo) {
+        await api.organize(repo.id, group, values);
+      }
       if (!alive) return;
-      changedMetadata(repo.id);
-      repos.value = repos.value.map((r) =>
-        r.id === repo.id
-          ? { ...r, collection: group || null, tags: values }
-          : r,
+      const updatedIds = new Set(adding ? chosen.map((item) => item.id) : [repo?.id]);
+      for (const id of updatedIds) if (id !== undefined) changedMetadata(id);
+      repos.value = repos.value.map((item) =>
+        updatedIds.has(item.id)
+          ? { ...item, collection: group || null, tags: adding ? item.tags : values }
+          : item,
       );
       showOrganize.value = false;
+      if (adding) {
+        selected.value = null;
+        view.value = "collection:" + group;
+        query.value = "";
+      }
       showNotice("Collection updated");
     } catch (reason) {
       if (alive) organizationError.value = String(reason);
@@ -1845,17 +1863,15 @@ function createView(lifecycle: Lifecycle<Props>) {
                     <span className={cn("side-count")}>{attention.value}</span>
                   </SidebarMenuButton>
                   <SidebarMenuButton
-                    title={"Activity history"}
+                    title={"Activity"}
+                    data-tour="activity"
                     active={
                       view.value === "activity" && selected.value === null
                     }
-                    onClick={() => {
-                      selected.value = null;
-                      view.value = "activity";
-                    }}
+                    onClick={() => openWorkspaceActivity()}
                   >
                     <History size={17} />
-                    {" Activity history"}
+                    {" Activity"}
                   </SidebarMenuButton>
                 </SidebarMenu>
               </SidebarGroup>
@@ -1875,24 +1891,26 @@ function createView(lifecycle: Lifecycle<Props>) {
                 </div>
                 <SidebarMenu>
                   {(() => {
-                    const entries = collections.value;
-                    return entries.map((c, index) => (
-                      <Fragment key={index}>
-                        <SidebarMenuButton
-                          title={c}
-                          active={
-                            view.value === "collection:" + c &&
-                            selected.value === null
-                          }
-                          onClick={() => {
-                            selected.value = null;
-                            view.value = "collection:" + c;
-                          }}
-                        >
-                          <Folder size={17} />
-                          {c}
-                        </SidebarMenuButton>
-                      </Fragment>
+                    const members = new Map<string, Repo[]>();
+                    for (const repo of repos.value) {
+                      if (!repo.collection) continue;
+                      const entries = members.get(repo.collection);
+                      if (entries) entries.push(repo);
+                      else members.set(repo.collection, [repo]);
+                    }
+                    return collections.value.map((name) => (
+                      <CollectionMenuItem
+                        key={name}
+                        name={name}
+                        repositories={orderRepos(members.get(name) ?? [])}
+                        active={view.value === "collection:" + name && selected.value === null}
+                        selectedRepo={selected.value}
+                        onOpen={() => {
+                          selected.value = null;
+                          view.value = "collection:" + name;
+                        }}
+                        onRepository={(id) => void selectRepo(id)}
+                      />
                     ));
                   })()}
                 </SidebarMenu>
@@ -2099,6 +2117,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                               />
                             </ShadcnButton>
                             <ShadcnButton
+                              data-tour="organize"
                               variant="outline"
                               disabled={working.value}
                               onClick={() => openOrganization(currentRepo)}
@@ -2209,7 +2228,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                               tab === "changes" ||
                               tab === "history" ||
                               tab === "pulls" ||
-                              tab === "workflows"
+                              tab === "activity"
                             ) {
                               activeTab.value = tab;
                               if (tab === "changes") void refresh();
@@ -2220,7 +2239,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                             aria-label={"Repository views"}
                             className={cn("repository-tabs")}
                           >
-                            <TabsTrigger value={"changes"}>
+                            <TabsTrigger value={"changes"} data-tour="changes">
                               <FileCode size={16} />
                               {" Changes "}
                               <span>{currentRepo.dirty}</span>
@@ -2235,12 +2254,12 @@ function createView(lifecycle: Lifecycle<Props>) {
                                   <GitBranch size={16} />
                                   {" Pull requests"}
                                 </TabsTrigger>
-                                <TabsTrigger value={"workflows"}>
-                                  <Activity size={16} />
-                                  {" Workflows"}
-                                </TabsTrigger>
                               </>
                             ) : null}
+                            <TabsTrigger value="activity">
+                              <Activity size={16} />
+                              Activity
+                            </TabsTrigger>
                           </TabsList>
                           {launchFailures.value[currentRepo.id] ? (
                             <>
@@ -2304,14 +2323,14 @@ function createView(lifecycle: Lifecycle<Props>) {
                             {currentRepo.ci_conclusion ||
                             currentRepo.ci_status ? (
                               <>
-                                <span className={cn("workbench-ci")}>
+                                <Button className="workbench-ci" onClick={() => openRepositoryActivity(currentRepo.id)} aria-label="Open repository activity">
                                   <PlatformIcon
                                     remote={"https://github.com"}
                                     size={14}
                                   />
                                   {currentRepo.ci_conclusion ??
                                     currentRepo.ci_status}
-                                </span>
+                                </Button>
                               </>
                             ) : null}
                           </div>
@@ -2377,7 +2396,28 @@ function createView(lifecycle: Lifecycle<Props>) {
                               </Button>
                             </div>
                           ) : null}
-                          {detailError.value && !details.value ? (
+                          {activeTab.value === "activity" ? (
+                            <Tabs.Content value="activity" className="repository-activity">
+                              {currentRepo.github_full_name && (
+                                accounts.value.length ? (
+                                  <Button variant="secondary" disabled={working.value} onClick={sync}>
+                                    <RefreshCw size={15} />
+                                    Sync GitHub
+                                  </Button>
+                                ) : (
+                                  <Button variant="secondary" onClick={openAccount}>
+                                    <Github size={15} />
+                                    Connect GitHub
+                                  </Button>
+                                )
+                              )}
+                              <ActivityHistory
+                                items={repositoryActivity.value}
+                                selectedId={activeActivityId.value}
+                                onSelect={(id) => (activeActivityId.value = id)}
+                              />
+                            </Tabs.Content>
+                          ) : detailError.value && !details.value ? (
                             <>
                               <div role={"alert"} className={cn("empty-block")}>
                                 <CircleAlert size={20} />
@@ -3104,114 +3144,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                                 </Fragment>
                                               </Tabs.Content>
                                             </>
-                                          ) : (
-                                            <>
-                                              {activeTab.value ===
-                                              "workflows" ? (
-                                                <>
-                                                  <Tabs.Content
-                                                    value={"workflows"}
-                                                  >
-                                                    <div
-                                                      className={cn(
-                                                        "repository-workflows",
-                                                      )}
-                                                    >
-                                                      {accounts.value.length ? (
-                                                        <>
-                                                          <Button
-                                                            variant={
-                                                              "secondary"
-                                                            }
-                                                            disabled={
-                                                              working.value
-                                                            }
-                                                            onClick={sync}
-                                                          >
-                                                            <RefreshCw
-                                                              size={15}
-                                                            />
-                                                            {" Sync GitHub"}
-                                                          </Button>
-                                                        </>
-                                                      ) : (
-                                                        <>
-                                                          {workflowRuns.value
-                                                            .length ? (
-                                                            <>
-                                                              <Button
-                                                                variant={
-                                                                  "secondary"
-                                                                }
-                                                                onClick={
-                                                                  openAccount
-                                                                }
-                                                              >
-                                                                <Github
-                                                                  size={15}
-                                                                />
-                                                                {
-                                                                  " Connect GitHub"
-                                                                }
-                                                              </Button>
-                                                            </>
-                                                          ) : null}
-                                                        </>
-                                                      )}
-                                                      {workflowRuns.value
-                                                        .length ? (
-                                                        <>
-                                                          <ActivityHistory
-                                                            items={
-                                                              workflowRuns.value
-                                                            }
-                                                            filterable={false}
-                                                          />
-                                                        </>
-                                                      ) : (
-                                                        <>
-                                                          <Empty
-                                                            title={
-                                                              "No workflow runs yet"
-                                                            }
-                                                          >
-                                                            {accounts.value
-                                                              .length ? (
-                                                              <>
-                                                                <p>
-                                                                  {
-                                                                    "Sync GitHub to load recent runs."
-                                                                  }
-                                                                </p>
-                                                              </>
-                                                            ) : (
-                                                              <>
-                                                                <Button
-                                                                  variant={
-                                                                    "primary"
-                                                                  }
-                                                                  onClick={
-                                                                    openAccount
-                                                                  }
-                                                                >
-                                                                  <Github
-                                                                    size={15}
-                                                                  />
-                                                                  {
-                                                                    " Connect GitHub"
-                                                                  }
-                                                                </Button>
-                                                              </>
-                                                            )}
-                                                          </Empty>
-                                                        </>
-                                                      )}
-                                                    </div>
-                                                  </Tabs.Content>
-                                                </>
-                                              ) : null}
-                                            </>
-                                          )}
+                                          ) : null}
                                         </>
                                       )}
                                     </>
@@ -3223,7 +3156,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                         </Tabs.Root>
                         <Collapsible
                           className={cn("repo-actions")}
-                          heading={() => <>{"Repository actions"}</>}
+                          heading={() => <span data-tour="repo-actions">Repository actions</span>}
                         >
                           <div className={cn("toolbar")}>
                             <Button
@@ -3231,6 +3164,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                               disabled={
                                 !repoMetadataReady.value || !workflowReady.value
                               }
+                              title="Set Git identity and repository defaults"
                               onClick={() => (showRepoSettings.value = true)}
                             >
                               {"Repository settings"}
@@ -3285,25 +3219,24 @@ function createView(lifecycle: Lifecycle<Props>) {
                               <div className={cn("panel-title")}>
                                 {"Recent activity"}
                               </div>
-                              {(() => {
-                                const entries = repoActivity.value;
-                                return entries.map((item, index) => (
-                                  <Fragment key={index}>
-                                    <div className={cn("activity-entry")}>
-                                      <div className={cn("activity-icon")}>
-                                        <Activity size={15} />
-                                      </div>
-                                      <div className={cn("activity-text")}>
-                                        <strong>{item.title}</strong>
-                                        <span>
-                                          {short(item.detail ?? "", 70)}
-                                        </span>
-                                      </div>
-                                      <time>{date(item.occurred_at)}</time>
-                                    </div>
-                                  </Fragment>
-                                ));
-                              })()}
+                              {repoActivity.value.map((item) => (
+                                <Button
+                                  key={item.id}
+                                  className="activity-entry"
+                                  onClick={() => openRepositoryActivity(currentRepo.id, item.id)}
+                                >
+                                  <span className="activity-icon" aria-hidden="true">
+                                    <Activity size={15} />
+                                  </span>
+                                  <span className="activity-text">
+                                    <strong>{activityTitle(item)}</strong>
+                                    {item.detail && item.kind !== "ci" && (
+                                      <span>{short(item.detail, 70)}</span>
+                                    )}
+                                  </span>
+                                  <time>{date(item.occurred_at)}</time>
+                                </Button>
+                              ))}
                             </Card>
                           </>
                         ) : null}
@@ -3340,7 +3273,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                         >
                           <TabsList aria-label="Settings sections">
                             <TabsTrigger value="general">General</TabsTrigger>
-                            <TabsTrigger value="accounts">GitHub accounts</TabsTrigger>
+                            <TabsTrigger value="accounts">Accounts</TabsTrigger>
                           </TabsList>
                           <Tabs.Content value="general" className="settings-panels">
                             <Card
@@ -3348,7 +3281,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                               aria-label={"Appearance"}
                               className={cn("panel workspace-settings")}
                             >
-                              <h2>{"Appearance"}</h2>
+                              <h2 data-tour="appearance">Appearance</h2>
                               {appearanceReady.value ? (
                                 <>
                                   <LoadBoundary>
@@ -3446,7 +3379,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                             </Card>
                             <Card className={cn("panel walkthrough-settings")}>
                               <div>
-                                <strong>{"Live logs"}</strong>
+                                <strong data-tour="logs">Live logs</strong>
                                 <p>
                                   {
                                     "View runtime activity, Git diagnostics, and error details."
@@ -3462,85 +3395,13 @@ function createView(lifecycle: Lifecycle<Props>) {
                             </Card>
                           </Tabs.Content>
                           <Tabs.Content value="accounts" className="settings-panels">
-                            <Card className={cn("panel")}>
-                              <div className={cn("panel-title")}>
-                                {"GitHub accounts "}
-                                <span>
-                                  {accounts.value.length}
-                                  {" connected"}
-                                </span>
-                              </div>
-                              {(() => {
-                                const entries = accounts.value;
-                                return entries.length === 0 ? (
-                                  <>
-                                    <div className={cn("empty-small")}>
-                                      {
-                                        "No GitHub accounts connected. Local Git works without one."
-                                      }
-                                    </div>
-                                  </>
-                                ) : (
-                                  entries.map((acc, index) => (
-                                    <Fragment key={index}>
-                                      <div className={cn("account-row")}>
-                                        <div className={cn("account-avatar")}>
-                                          <PlatformIcon
-                                            remote={"https://github.com"}
-                                            size={19}
-                                          />
-                                        </div>
-                                        <div className={cn("account-info")}>
-                                          <strong>
-                                            {"@"}
-                                            {acc.login}
-                                          </strong>
-                                          <small>{acc.api_host}</small>
-                                        </div>
-                                        <Button
-                                          onClick={() =>
-                                            act(
-                                              () => api.sync(acc.id),
-                                              "Synchronized " + acc.login,
-                                            )
-                                          }
-                                          className={cn("micro")}
-                                        >
-                                          {"Sync workflows"}
-                                        </Button>
-                                        <Button
-                                          onClick={() => disconnectAccount(acc)}
-                                          className={cn("micro dangerous")}
-                                        >
-                                          {"Disconnect"}
-                                        </Button>
-                                      </div>
-                                    </Fragment>
-                                  ))
-                                );
-                              })()}
-                              <div className={cn("panel-footer")}>
-                                <Button
-                                  data-tour={"connect"}
-                                  variant={"primary"}
-                                  onClick={openAccount}
-                                >
-                                  <Plus size={15} />
-                                  {" Connect account"}
-                                </Button>
-                              </div>
-                            </Card>
-                            <Card className={cn("panel info-panel")}>
-                              <ShieldCheck size={21} />
-                              <div>
-                                <strong>{"Credentials stay on your device"}</strong>
-                                <p>
-                                  {
-                                    "GitHub access tokens are stored in your operating system's credential manager. Repository metadata, pins, and activity are stored locally in SQLite. Account connections support GitHub.com; local Git works with other hosts."
-                                  }
-                                </p>
-                              </div>
-                            </Card>
+                            <AccountsSettings
+                              accounts={accounts.value}
+                              working={working.value}
+                              onConnect={openAccount}
+                              onSync={(account) => act(() => api.sync(account.id), "Synchronized " + account.login)}
+                              onDisconnect={disconnectAccount}
+                            />
                           </Tabs.Content>
                         </Tabs.Root>
                       </>
@@ -3549,7 +3410,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                         {view.value === "activity" ? (
                           <>
                             <div className={cn("page-heading")}>
-                              <h1>{"Activity history"}</h1>
+                              <h1>Activity</h1>
                               <Button
                                 variant={"secondary"}
                                 disabled={
@@ -3561,86 +3422,39 @@ function createView(lifecycle: Lifecycle<Props>) {
                                 {" Sync GitHub"}
                               </Button>
                             </div>
-                            <ActivityHistory items={activities.value} />
+                            <ActivityHistory
+                              items={activities.value}
+                              selectedId={activeActivityId.value}
+                              onSelect={(id) => (activeActivityId.value = id)}
+                            />
                           </>
                         ) : (
                           <>
                             {(() => {
                               const latestActivity = () => (
-                                <>
-                                  <Card
-                                    as={"section"}
-                                    aria-label={"Latest activity"}
-                                    className={cn("latest-activity panel")}
-                                  >
-                                    <div className={cn("latest-heading")}>
-                                      <h2>
-                                        <Clock3 size={17} />
-                                        {" Latest activity"}
-                                      </h2>
-                                      <Button
-                                        onClick={() =>
-                                          (view.value = "activity")
-                                        }
-                                        className={cn("text-action")}
-                                      >
-                                        {"View all activity "}
-                                        <ArrowUp size={13} />
+                                <Card as="section" aria-label="Latest activity" className="latest-activity panel">
+                                  <div className="latest-heading">
+                                    <h2><Clock3 size={17} /> Latest activity</h2>
+                                    <Button onClick={() => openWorkspaceActivity()} className="text-action">
+                                      View all activity <ArrowUp size={13} />
+                                    </Button>
+                                  </div>
+                                  <div className="latest-items">
+                                    {activities.value.length === 0 ? (
+                                      <div className="empty-small">No activity yet</div>
+                                    ) : activities.value.slice(0, 3).map((item) => (
+                                      <Button key={item.id} className="latest-item" onClick={() => openWorkspaceActivity(item.id)}>
+                                        <span className="activity-icon" aria-hidden="true">
+                                          {item.kind === "ci" ? <Activity size={16} /> : <GitCommitHorizontal size={16} />}
+                                        </span>
+                                        <span className="latest-item-content">
+                                          <strong>{item.repo_name ?? "Workspace"} · {activityTitle(item)}</strong>
+                                          <small>{date(item.occurred_at)}</small>
+                                        </span>
                                       </Button>
-                                    </div>
-                                    <div className={cn("latest-items")}>
-                                      {(() => {
-                                        const entries = activities.value.slice(
-                                          0,
-                                          3,
-                                        );
-                                        return entries.length === 0 ? (
-                                          <>
-                                            <div className={cn("empty-small")}>
-                                              {"No activity yet"}
-                                            </div>
-                                          </>
-                                        ) : (
-                                          entries.map((item, index) => (
-                                            <Fragment key={index}>
-                                              <div
-                                                className={cn("latest-item")}
-                                              >
-                                                <span
-                                                  className={cn(
-                                                    "activity-icon",
-                                                  )}
-                                                >
-                                                  {item.kind === "ci" ? (
-                                                    <>
-                                                      <Activity size={16} />
-                                                    </>
-                                                  ) : (
-                                                    <>
-                                                      <GitCommitHorizontal
-                                                        size={16}
-                                                      />
-                                                    </>
-                                                  )}
-                                                </span>
-                                                <div>
-                                                  <strong>
-                                                    {item.repo_name ?? "GitHub"}
-                                                    {" · "}
-                                                    {item.title}
-                                                  </strong>
-                                                  <small>
-                                                    {date(item.occurred_at)}
-                                                  </small>
-                                                </div>
-                                              </div>
-                                            </Fragment>
-                                          ))
-                                        );
-                                      })()}
-                                    </div>
-                                  </Card>
-                                </>
+                                    ))}
+                                  </div>
+                                </Card>
                               );
                               return (
                                 <>
@@ -3665,6 +3479,15 @@ function createView(lifecycle: Lifecycle<Props>) {
                                       >
                                         {"Import from…"}
                                       </Button>
+                                      {view.value.startsWith("collection:") && (
+                                        <Button
+                                          variant="secondary"
+                                          onClick={() => openOrganization(undefined, view.value.slice(11))}
+                                        >
+                                          <Plus size={16} />
+                                          Add to collection
+                                        </Button>
+                                      )}
                                       <Button
                                         data-tour={"add"}
                                         variant={"primary"}
@@ -3775,7 +3598,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                             query.value = next;
                                           }}
                                         />
-                                        <kbd className={cn("key-hint")}>
+                                        <kbd className={cn("key-hint")} title="Open the repository switcher">
                                           {"Ctrl K"}
                                         </kbd>
                                       </div>
@@ -3810,19 +3633,16 @@ function createView(lifecycle: Lifecycle<Props>) {
                                       ? "repository"
                                       : "repositories"}
                                   </div>
-                                  {view.value === "all" ? (
-                                    <>
-                                      <div className={cn("overview-latest")}>
-                                        {latestActivity()}
-                                      </div>
-                                    </>
-                                  ) : null}
+                                  {view.value === "all" && (
+                                    <div className="overview-latest">{latestActivity()}</div>
+                                  )}
                                   <div
                                     aria-label={"Repositories"}
                                     className={cn(
                                       "repository-shelf",
                                       shelfLayout.value === "rows" &&
                                         "repository-rows",
+                                      shelfLayout.value === "rows" && view.value.startsWith("collection:") && "collection-rows",
                                     )}
                                   >
                                     {(() => {
@@ -4114,17 +3934,13 @@ function createView(lifecycle: Lifecycle<Props>) {
                                                             {r.ci_conclusion ||
                                                             r.ci_status ? (
                                                               <>
-                                                                <span
-                                                                  className={cn(
-                                                                    "card-ci",
-                                                                  )}
-                                                                >
+                                                                <Button className="card-ci" onClick={() => openRepositoryActivity(r.id)} aria-label={`Open activity for ${r.name}`}>
                                                                   <Activity
                                                                     size={12}
                                                                   />
                                                                   {r.ci_conclusion ??
                                                                     r.ci_status}
-                                                                </span>
+                                                                </Button>
                                                               </>
                                                             ) : null}
                                                           </footer>
@@ -4377,9 +4193,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                       </div>
                                     </>
                                   ) : null}
-                                  {view.value !== "all" ? (
-                                    <>{latestActivity()}</>
-                                  ) : null}
+                                  {view.value !== "all" && latestActivity()}
                                 </>
                               );
                             })()}
@@ -4400,6 +4214,7 @@ function createView(lifecycle: Lifecycle<Props>) {
               <Suspense fallback={null}>
                 <AddRepository
                   accounts={accounts.value}
+                  repositories={repos.value}
                   defaultFolder={workspace.value.default_folder}
                   onclose={closeAdd}
                   onconnect={() => {
@@ -4417,7 +4232,7 @@ function createView(lifecycle: Lifecycle<Props>) {
             <Modal
               label={
                 addingCollection.value
-                  ? "Add collection"
+                  ? (existingCollection.value ? "Add to collection" : "Add collection")
                   : "Organize repository"
               }
               canClose={!organizing.value}
@@ -4425,7 +4240,7 @@ function createView(lifecycle: Lifecycle<Props>) {
             >
               <h2>
                 {addingCollection.value
-                  ? "Add collection"
+                  ? (existingCollection.value ? "Add to collection" : "Add collection")
                   : "Organize " +
                     (organizationRepo.value?.name ?? "repository")}
               </h2>
@@ -4455,35 +4270,59 @@ function createView(lifecycle: Lifecycle<Props>) {
                         }}
                         className={cn("collection-form")}
                       >
-                        <Label htmlFor={"collection-repository"}>
-                          {"Repository"}
-                        </Label>
-                        <LoadBoundary>
-                          <Suspense fallback={null}>
-                            <RepositoryPicker
-                              id={"collection-repository"}
-                              repos={repos.value}
-                              selectedId={organizationId.value}
+                        {existingCollection.value ? (
+                          <strong>{existingCollection.value}</strong>
+                        ) : (
+                          <>
+                            <Label htmlFor="collection-name">Collection name</Label>
+                            <Input
+                              id="collection-name"
+                              value={collectionName.value}
                               disabled={organizing.value}
-                              onSelectedIdChange={(next) => {
-                                organizationId.value = next;
-                              }}
+                              maxLength={100}
+                              required
+                              onValueChange={(next) => (collectionName.value = next)}
                             />
-                          </Suspense>
-                        </LoadBoundary>
-                        <Label htmlFor={"collection-name"}>
-                          {"Collection name"}
-                        </Label>
-                        <Input
-                          id={"collection-name"}
-                          value={collectionName.value}
-                          disabled={organizing.value}
-                          maxLength={100}
-                          required={true}
-                          onValueChange={(next) => {
-                            collectionName.value = next;
-                          }}
-                        />
+                          </>
+                        )}
+                        <fieldset className="collection-repo-choices" disabled={organizing.value}>
+                          <legend>Repositories ({collectionRepos.value.size} selected)</legend>
+                          <Input
+                            placeholder="Find repositories"
+                            aria-label="Find repositories to add"
+                            value={collectionQuery.value}
+                            onValueChange={(next) => (collectionQuery.value = next)}
+                          />
+                          <div className="collection-repo-list">
+                            {(() => {
+                              const matches = filteredRepos(repos.value, collectionQuery.value, "all")
+                                .filter((repo) => !existingCollection.value || repo.collection !== existingCollection.value);
+                              return matches.length ? matches.map((repo) => (
+                                <label key={repo.id} className="collection-repo-choice">
+                                  <Checkbox
+                                    checked={collectionRepos.value.has(repo.id)}
+                                    onCheckedChange={(checked) => {
+                                      const next = new Set(collectionRepos.value);
+                                      if (checked) next.add(repo.id);
+                                      else next.delete(repo.id);
+                                      collectionRepos.value = next;
+                                    }}
+                                  />
+                                  <span>
+                                    {repo.name}
+                                    {repo.collection && <small>Currently in {repo.collection}</small>}
+                                  </span>
+                                </label>
+                              )) : <p className="empty-small">No repositories to add.</p>;
+                            })()}
+                          </div>
+                        </fieldset>
+                        {repos.value.some((repo) =>
+                          collectionRepos.value.has(repo.id) && repo.collection &&
+                          repo.collection !== collectionName.value.trim()
+                        ) && (
+                          <p className="folder-help">Selected repositories move from their current collection.</p>
+                        )}
                         {organizationError.value ? (
                           <>
                             <p
@@ -4507,11 +4346,11 @@ function createView(lifecycle: Lifecycle<Props>) {
                             variant={"primary"}
                             disabled={
                               organizing.value ||
-                              !organizationRepo.value ||
+                              collectionRepos.value.size === 0 ||
                               !collectionName.value.trim()
                             }
                           >
-                            {"Save collection"}
+                            {existingCollection.value ? "Add selected" : "Save collection"}
                           </Button>
                         </div>
                       </form>
@@ -4534,6 +4373,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                           tags.value = next;
                         }}
                       />
+                      <p className="folder-help">Press Enter to add a tag. Filter by it in repository search.</p>
                       {organizationError.value ? (
                         <>
                           <p role={"alert"} className={cn("connection-error")}>
@@ -4874,7 +4714,8 @@ function createView(lifecycle: Lifecycle<Props>) {
               canClose={!working.value}
               onclose={() => (showSavedChanges.value = false)}
             >
-              <h2>{"Saved changes"}</h2>
+              <h2>Saved changes</h2>
+              <p className="folder-help">Apply a stash to bring its changes into the current branch.</p>
               <p>
                 {details.value.git.branch}
                 {details.value.git.dirty ? (

@@ -1,155 +1,116 @@
-import {
-Activity,
-FolderGit2,
-GitCommitHorizontal,
-History,
-} from "lucide-react";
-import { observer } from "mobx-react-lite";
-import { Fragment } from "react";
-import type { Activity as ActivityItem } from "../../lib/api";
-import {
-SelectOption,
-derived,
-state,
-useController,
-type Lifecycle
-} from "../controller";
-import { Badge,Label,NativeSelect } from "../ui";
-import { cn } from "../utils";
+import { Activity, ExternalLink, FolderGit2, GitCommitHorizontal, History } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { api, type Activity as ActivityItem } from "../../lib/api";
+import { SelectOption } from "../controller";
+import { Badge, Button, Label, NativeSelect } from "../ui";
+
+const kinds = {
+  git: { label: "Git", icon: GitCommitHorizontal },
+  ci: { label: "Workflow run", icon: Activity },
+  repo: { label: "Repository", icon: FolderGit2 },
+};
+const day = new Intl.DateTimeFormat(undefined, { dateStyle: "full" });
+const time = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
+
+export function activityTitle(item: ActivityItem) {
+  if (item.kind !== "git" || !item.title.startsWith("Git: ")) return item.title;
+  const action = item.title.slice(5).replaceAll("_", " ");
+  return action.charAt(0).toUpperCase() + action.slice(1);
+}
+
 type Props = {
   items: ActivityItem[];
-  filterable?: boolean;
+  selectedId: number | null;
+  onSelect: (id: number | null) => void;
 };
-function createView(lifecycle: Lifecycle<Props>) {
-  const items = derived(() => lifecycle.props().items);
-  const filterable = derived(() => lifecycle.props().filterable ?? true);
-  let filter = state("all");
-  const day = new Intl.DateTimeFormat(undefined, { dateStyle: "full" });
-  const time = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
-  const kinds = {
-    git: { label: "Git", icon: GitCommitHorizontal },
-    ci: { label: "Workflow", icon: Activity },
-    repo: { label: "Repository", icon: FolderGit2 },
-  };
-  const groups = derived(() => {
-    const days = new Map<string, ActivityItem[]>();
-    for (const item of items.value) {
-      if (filter.value !== "all" && item.kind !== filter.value) continue;
-      const key = day.format(item.occurred_at * 1000);
-      const entries = days.get(key);
-      if (entries) entries.push(item);
-      else days.set(key, [item]);
+
+export default function ActivityHistory({ items, selectedId, onSelect }: Props) {
+  const [filter, setFilter] = useState("all");
+  const [error, setError] = useState<{ id: number; message: string } | null>(null);
+  const selected = useRef<HTMLButtonElement>(null);
+  const groups = new Map<string, ActivityItem[]>();
+
+  for (const item of items) {
+    if (filter !== "all" && item.kind !== filter) continue;
+    const key = day.format(item.occurred_at * 1000);
+    const events = groups.get(key);
+    if (events) events.push(item);
+    else groups.set(key, [item]);
+  }
+
+  useEffect(() => {
+    selected.current?.scrollIntoView({ block: "nearest" });
+  }, [selectedId]);
+
+  async function openInBrowser(item: ActivityItem) {
+    setError(null);
+    try {
+      await api.openActivityInBrowser(item.id);
+    } catch (reason) {
+      setError({ id: item.id, message: String(reason) });
     }
-    return [...days];
-  });
-  function eventKind(kind: string) {
-    return (
-      kinds[kind as keyof typeof kinds] ?? { label: "Activity", icon: History }
-    );
   }
-  function eventTitle(item: ActivityItem) {
-    if (item.kind !== "git" || !item.title.startsWith("Git: "))
-      return item.title;
-    const action = item.title.slice(5).replaceAll("_", " ");
-    return action.charAt(0).toUpperCase() + action.slice(1);
-  }
-  return () => (
-    <>
-      <div className={cn("activity-feed")}>
-        {filterable.value && items.value.length ? (
-          <>
-            <div className={cn("activity-filter")}>
-              <Label htmlFor={"activity-type"}>{"Event type"}</Label>
-              <NativeSelect
-                id={"activity-type"}
-                value={filter.value}
-                onValueChange={(next) => {
-                  filter.value = next;
-                }}
-              >
-                <SelectOption value={"all"}>{"All events"}</SelectOption>
-                {(() => {
-                  const entries = Object.entries(kinds);
-                  return entries.map(([key, kind], index) => (
-                    <Fragment key={index}>
-                      <SelectOption value={key}>{kind.label}</SelectOption>
-                    </Fragment>
-                  ));
-                })()}
-              </NativeSelect>
-            </div>
-          </>
-        ) : null}
-        {(() => {
-          const entries = groups.value;
-          return entries.length === 0 ? (
-            <>
-              <p className={cn("empty-small")}>
-                {items.value.length
-                  ? "No events of this type."
-                  : "No activity yet."}
-              </p>
-            </>
-          ) : (
-            entries.map(([label, events], index) => (
-              <Fragment key={label}>
-                <section aria-label={label} className={cn("activity-day")}>
-                  <h2>{label}</h2>
-                  <ul>
-                    {(() => {
-                      const entries = events;
-                      return entries.map((item, index) => (
-                        <Fragment key={item.id}>
-                          {(() => {
-                            const kind = eventKind(item.kind);
-                            return (
-                              <>
-                                <li>
-                                  <span className={cn("activity-icon")}>
-                                    <kind.icon size={16} aria-hidden={"true"} />
-                                  </span>
-                                  <div className={cn("activity-event")}>
-                                    <strong>{eventTitle(item)}</strong>
-                                    <span>
-                                      {item.repo_name ??
-                                        (item.kind === "ci"
-                                          ? "GitHub"
-                                          : "Workspace")}
-                                    </span>
-                                    {item.detail &&
-                                    item.detail !== item.repo_name ? (
-                                      <>
-                                        <p>{item.detail}</p>
-                                      </>
-                                    ) : null}
-                                  </div>
-                                  <Badge className={cn("activity-kind")}>
-                                    {kind.label}
-                                  </Badge>
-                                  <time
-                                    dateTime={new Date(
-                                      item.occurred_at * 1000,
-                                    ).toISOString()}
-                                  >
-                                    {time.format(item.occurred_at * 1000)}
-                                  </time>
-                                </li>
-                              </>
-                            );
-                          })()}
-                        </Fragment>
-                      ));
-                    })()}
-                  </ul>
-                </section>
-              </Fragment>
-            ))
-          );
-        })()}
-      </div>
-    </>
+
+  return (
+    <div className="activity-feed">
+      {items.length > 0 && (
+        <div className="activity-filter">
+          <Label htmlFor="activity-type">Event type</Label>
+          <NativeSelect id="activity-type" value={filter} onValueChange={setFilter}>
+            <SelectOption value="all">All events</SelectOption>
+            {Object.entries(kinds).map(([key, kind]) => (
+              <SelectOption key={key} value={key}>{kind.label}</SelectOption>
+            ))}
+          </NativeSelect>
+        </div>
+      )}
+      {groups.size === 0 && (
+        <p className="empty-small">{items.length ? "No events of this type." : "No activity yet."}</p>
+      )}
+      {[...groups].map(([label, events]) => (
+        <section key={label} aria-label={label} className="activity-day">
+          <h2>{label}</h2>
+          <ul>
+            {events.map((item) => {
+              const { label, icon: Icon } = kinds[item.kind as keyof typeof kinds] ?? { label: "Activity", icon: History };
+              const expanded = selectedId === item.id;
+              const timestamp = new Date(item.occurred_at * 1000);
+              const detail = item.kind === "ci" || item.detail === item.repo_name ? null : item.detail;
+              return (
+                <li key={item.id}>
+                  <Button
+                    ref={expanded ? selected : undefined}
+                    className="activity-row"
+                    aria-expanded={expanded}
+                    onClick={() => onSelect(expanded ? null : item.id)}
+                  >
+                    <span className="activity-icon"><Icon size={16} aria-hidden="true" /></span>
+                    <span className="activity-event">
+                      <strong>{activityTitle(item)}</strong>
+                      <span>{item.repo_name ?? (item.kind === "ci" ? "GitHub" : "Workspace")}</span>
+                    </span>
+                    <Badge className="activity-kind">{label}</Badge>
+                    <time dateTime={timestamp.toISOString()}>{time.format(timestamp)}</time>
+                  </Button>
+                  {expanded && (
+                    <div className="activity-details">
+                      {detail && <p>{detail}</p>}
+                      {!detail && <p><time dateTime={timestamp.toISOString()}>{timestamp.toLocaleString()}</time></p>}
+                      {item.can_open_in_browser && (
+                        <Button variant="secondary" onClick={() => void openInBrowser(item)}>
+                          <ExternalLink size={15} />
+                          Open in browser
+                        </Button>
+                      )}
+                      {error?.id === item.id && <p role="alert">{error.message}</p>}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ))}
+    </div>
   );
 }
-export default observer(function ActivityHistory(props: Props) {
-  return useController(createView, props);
-});

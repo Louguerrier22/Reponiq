@@ -116,3 +116,11 @@
     display: none;
   }
 }
+
+.sidebar .collection-menu-item > [data-sidebar="menu-button"] { padding-inline-end: 36px; }
+.sidebar .collection-menu-expand { top: 5px; height: 28px; width: 28px; color: var(--muted-foreground); }
+.collection-menu-expand[data-state="open"] svg { transform: rotate(90deg); }
+.sidebar .collection-menu-projects button { width: 100%; height: auto; min-height: 30px; justify-content: flex-start; }
+.collection-menu-projects button > span { min-width: 0; }
+[data-collapsible="icon"] .sidebar .collection-menu-item > [data-sidebar="menu-button"] { padding-inline-end: 0; }
+[data-collapsible="icon"] .sidebar :is(.collection-menu-expand, .collection-menu-projects, .collection-menu-item > [data-sidebar="menu-button"] > span) { display: none; }

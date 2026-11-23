@@ -17,7 +17,7 @@ export class GitFailure extends Error {
   constructor(message:string, readonly code:string) { super(message); }
 }
 export type Commit = { hash: string; subject: string; author: string; timestamp: number };
-export type Activity = { id: number; repo_id: number | null; repo_name: string | null; kind: string; title: string; detail: string | null; occurred_at: number };
+export type Activity = { id: number; repo_id: number | null; repo_name: string | null; kind: string; title: string; detail: string | null; can_open_in_browser?: boolean; occurred_at: number };
 export type Account = { id: number; login: string; api_host: string; created_at: number };
 export type FileChange = { x: string; y: string; path: string; original_path: string | null };
 export type GitState = { has_head:boolean;head:string|null;branch:string;upstream:string|null;upstream_gone:boolean;remote:string|null;remote_ref:string|null;remotes:string[];operation:string|null;conflicts:string[];staged:number;dirty:number;ahead:number;behind:number };
@@ -52,7 +52,7 @@ export const api = {
   advanceSetup: (expected: SetupStep) => invoke<SetupStep>('advance_setup', { expected }),
   walkthroughSeen: () => invoke<boolean>('walkthrough_seen'),
   finishWalkthrough: () => invoke<void>('finish_walkthrough'),
-  onlineRepos: (accountId:number,page=1) => invoke<Page<OnlineRepo>>('list_online_repos',{accountId,page}),
+  onlineRepos: (accountId:number,page=1,catalog=false) => invoke<Page<OnlineRepo>>('list_online_repos',{accountId,page,catalog}),
   repositoryOwners: (accountId:number,page=1) => invoke<Page<RepositoryOwner> & {warning:string|null}>('repository_owners',{accountId,page}),
   cloneRepository: (accountId:number,repositoryId:number,parent:string,name:string) => invoke<Repo>('clone_repository',{accountId,repositoryId,parent,name}),
   cloneRepositoryUrl: (url:string,parent:string,name:string) => invoke<Repo>('clone_repository_url',{url,parent,name}),
@@ -92,6 +92,7 @@ export const api = {
   remove: (id: number) => invoke<void>('remove_repo', { id }),
   pin: (id: number, pinned: boolean) => invoke<void>('pin_repo', { id, pinned }),
   organize: (id: number, collection: string, tags: string[]) => invoke<void>('organize_repo', { id, collection, tags }),
+  assignCollection: (targets: Target[], collection: string) => invoke<void>('assign_collection', { targets, collection }),
   refresh: () => invoke<Repo[]>('refresh_repos'),
   details: (id: number) => invoke<RepoDetails>('repo_details', { id }),
   history: (id:number,skip:number) => invoke<Commit[]>('history_page',{id,skip}),
@@ -117,6 +118,7 @@ export const api = {
     }
   },
   activity: () => invoke<Activity[]>('get_activity'),
+  openActivityInBrowser: (id: number) => invoke<void>('open_activity_in_browser', { id }),
   accounts: () => invoke<Account[]>('list_accounts'),
   connect: (token: string, apiHost = 'https://api.github.com') => invoke<Account>('connect_account', { token, apiHost }),
   browserLoginAvailable: () => invoke<boolean>('browser_login_available'),

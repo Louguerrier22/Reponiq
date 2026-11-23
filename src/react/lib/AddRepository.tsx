@@ -1,6 +1,7 @@
 import {
 ArrowLeft,
 Check,
+CircleCheck,
 ChevronDown,
 Download,
 FolderOpen,
@@ -20,6 +21,7 @@ type Repo,
 type RepositoryOwner,
 } from "../../lib/api";
 import { cloneFolderName } from "../../lib/clone";
+import { loadOnlineCatalog } from "../../lib/online-catalog";
 import {
 SelectOption,
 derived,
@@ -34,6 +36,7 @@ import Modal from "./Modal";
 import PlatformIcon from "./PlatformIcon";
 type Props = {
   accounts: Account[];
+  repositories: Repo[];
   defaultFolder?: string | null;
   onclose: () => void;
   onconnect: () => void;
@@ -66,6 +69,12 @@ function createView(lifecycle: Lifecycle<Props>) {
     listLoading = state(false),
     listError = state(""),
     query = state("");
+  const catalog = state<OnlineRepo[] | null>(null);
+  const catalogLoading = state(false);
+  const catalogError = state("");
+  const searchPage = state(1);
+  const searching = derived(() => query.value.trim().length > 0);
+  const browseSize = 25;
   let selected = state<{
     accountId: number;
     repo: OnlineRepo;
@@ -74,16 +83,29 @@ function createView(lifecycle: Lifecycle<Props>) {
     cloneUrl = state(""),
     cloning = state(false);
   let sequence = 0,
+    catalogSequence = 0,
     ownerSequence = 0,
     alive = true;
   const sorted = derived(() =>
     accounts.value.slice().sort((a, b) => a.login.localeCompare(b.login)),
   );
-  const filtered = derived(() =>
-    rows.value.filter((r) =>
-      r.full_name.toLocaleLowerCase().includes(query.value.toLocaleLowerCase()),
+  const added = derived(() => new Set(
+    lifecycle.props().repositories.flatMap((repo) =>
+      repo.github_full_name ? [repo.github_full_name.toLowerCase()] : [],
     ),
-  );
+  ));
+  function alreadyAdded(repo: OnlineRepo) {
+    return added.value.has(repo.full_name.toLowerCase());
+  }
+  const filtered = derived(() => {
+    const search = query.value.trim().toLowerCase();
+    return (search ? catalog.value ?? [] : rows.value)
+      .filter((repo) => repo.full_name.toLowerCase().includes(search))
+      .sort((a, b) => Number(alreadyAdded(a)) - Number(alreadyAdded(b)));
+  });
+  const displayed = derived(() => searching.value
+    ? filtered.value.slice((searchPage.value - 1) * browseSize, searchPage.value * browseSize)
+    : filtered.value);
   lifecycle.mount(() => {
     parent.value = readablePath(defaultFolder.value ?? "");
   });
@@ -91,6 +113,7 @@ function createView(lifecycle: Lifecycle<Props>) {
     alive = false;
     ++sequence;
     ++ownerSequence;
+    ++catalogSequence;
   });
   function choose(next: typeof mode.value) {
     mode.value = next;
@@ -107,6 +130,7 @@ function createView(lifecycle: Lifecycle<Props>) {
     }
   }
   function changeCloneSource(source: typeof cloneSource.value) {
+    if (source === "url") changeCatalogQuery("");
     cloneSource.value = source;
     error.value = "";
     name.value =
@@ -139,6 +163,8 @@ function createView(lifecycle: Lifecycle<Props>) {
     }
   }
   async function expand(id: number, next = 1) {
+    if (expanded.value !== id) catalog.value = null;
+    changeCatalogQuery("");
     expanded.value = id;
     page.value = next;
     query.value = "";
@@ -157,6 +183,34 @@ function createView(lifecycle: Lifecycle<Props>) {
       if (alive && request === sequence) listError.value = String(e);
     } finally {
       if (alive && request === sequence) listLoading.value = false;
+    }
+  }
+  function changeCatalogQuery(value: string) {
+    query.value = value;
+    searchPage.value = 1;
+    if (!searching.value) {
+      ++catalogSequence;
+      catalogLoading.value = false;
+      catalogError.value = "";
+    } else if (!catalog.value && !catalogLoading.value && !catalogError.value && expanded.value !== null) {
+      void searchAccount(expanded.value);
+    }
+  }
+  async function searchAccount(id: number) {
+    const request = ++catalogSequence;
+    const isCurrent = () => alive && request === catalogSequence;
+    catalogError.value = "";
+    catalogLoading.value = true;
+    try {
+      const result = await loadOnlineCatalog(
+        (page) => api.onlineRepos(id, page, true),
+        isCurrent,
+      );
+      if (isCurrent()) catalog.value = result;
+    } catch (reason) {
+      if (isCurrent()) catalogError.value = String(reason);
+    } finally {
+      if (isCurrent()) catalogLoading.value = false;
     }
   }
   async function loadOwners(next = 1) {
@@ -258,6 +312,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                 <Button
                   disabled={busy.value}
                   onClick={() => {
+                    changeCatalogQuery("");
                     mode.value = "choose";
                     error.value = "";
                     ++sequence;
@@ -299,11 +354,11 @@ function createView(lifecycle: Lifecycle<Props>) {
                 <ShadcnButton
                   key={mode}
                   variant="ghost"
-                  className="h-auto w-full justify-start gap-3 whitespace-normal px-3 py-3 text-left"
+                  className="add-repository-choice h-auto w-full justify-start gap-3 whitespace-normal px-3 py-3 text-left"
                   onClick={() => choose(mode)}
                 >
                   <Icon aria-hidden="true" className="text-primary" />
-                  <span className="grid min-w-0 gap-1">
+                  <span className="grid min-w-0">
                     <span>{label}</span>
                     <small className="text-xs font-normal text-muted-foreground">{description}</small>
                   </span>
@@ -437,6 +492,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                               if (
                                                 expanded.value === account.id
                                               ) {
+                                                changeCatalogQuery("");
                                                 expanded.value = null;
                                                 ++sequence;
                                                 listLoading.value = false;
@@ -467,15 +523,13 @@ function createView(lifecycle: Lifecycle<Props>) {
                                                     account.login
                                                   }
                                                   placeholder={
-                                                    "Find in this page"
+                                                    "Search this account"
                                                   }
                                                   value={query.value}
                                                   disabled={busy.value}
-                                                  onValueChange={(next) => {
-                                                    query.value = next;
-                                                  }}
+                                                  onValueChange={changeCatalogQuery}
                                                 />
-                                                {listError.value ? (
+                                                {(searching.value ? catalogError.value : listError.value) ? (
                                                   <>
                                                     <p
                                                       role={"alert"}
@@ -483,15 +537,10 @@ function createView(lifecycle: Lifecycle<Props>) {
                                                         "connection-error",
                                                       )}
                                                     >
-                                                      {listError.value}
+                                                      {searching.value ? catalogError.value : listError.value}
                                                     </p>
                                                     <Button
-                                                      onClick={() =>
-                                                        expand(
-                                                          account.id,
-                                                          page.value,
-                                                        )
-                                                      }
+                                                      onClick={() => searching.value ? searchAccount(account.id) : expand(account.id, page.value)}
                                                       className={cn(
                                                         "text-action",
                                                       )}
@@ -500,7 +549,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                                     </Button>
                                                   </>
                                                 ) : null}
-                                                {listLoading.value ? (
+                                                {(searching.value ? catalogLoading.value : listLoading.value) ? (
                                                   <>
                                                     <p
                                                       role={"status"}
@@ -508,18 +557,18 @@ function createView(lifecycle: Lifecycle<Props>) {
                                                         "empty-small",
                                                       )}
                                                     >
-                                                      {"Loading repositories…"}
+                                                      {searching.value ? "Searching all repositories for this account…" : "Loading repositories…"}
                                                     </p>
                                                   </>
                                                 ) : (
                                                   <>
                                                     {(() => {
                                                       const entries =
-                                                        filtered.value;
+                                                        displayed.value;
                                                       return entries.length ===
                                                         0 ? (
                                                         <>
-                                                          {!listError.value ? (
+                                                          {!(searching.value ? catalogError.value : listError.value) ? (
                                                             <>
                                                               <p
                                                                 className={cn(
@@ -527,7 +576,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                                                 )}
                                                               >
                                                                 {
-                                                                  "No repositories on this page."
+                                                                  searching.value ? "No matching repositories in this account." : "No repositories on this page."
                                                                 }
                                                               </p>
                                                             </>
@@ -535,7 +584,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                                         </>
                                                       ) : (
                                                         entries.map(
-                                                          (repo, index) => (
+                                                          (repo) => (
                                                             <Fragment
                                                               key={repo.id}
                                                             >
@@ -574,19 +623,16 @@ function createView(lifecycle: Lifecycle<Props>) {
                                                                     repo.full_name
                                                                   }
                                                                 </span>
-                                                                {repo.private ? (
-                                                                  <>
-                                                                    <Lock
-                                                                      size={13}
-                                                                    />
-                                                                  </>
-                                                                ) : (
-                                                                  <>
-                                                                    <Globe
-                                                                      size={13}
-                                                                    />
-                                                                  </>
+                                                                {alreadyAdded(repo) && (
+                                                                  <span className="online-repo-icon online-repo-added" title="Already added">
+                                                                    <CircleCheck size={14} aria-hidden="true" />
+                                                                    <span>Already added</span>
+                                                                  </span>
                                                                 )}
+                                                                <span className="online-repo-icon" title={repo.private ? "Private repository" : "Public repository"}>
+                                                                  {repo.private ? <Lock size={13} aria-hidden="true" /> : <Globe size={13} aria-hidden="true" />}
+                                                                  <span className="sr-only">{repo.private ? "Private repository" : "Public repository"}</span>
+                                                                </span>
                                                                 {selected.value
                                                                   ?.accountId ===
                                                                   account.id &&
@@ -614,30 +660,20 @@ function createView(lifecycle: Lifecycle<Props>) {
                                                         variant={"secondary"}
                                                         disabled={
                                                           busy.value ||
-                                                          page.value === 1
+                                                          (searching.value ? searchPage.value : page.value) === 1
                                                         }
-                                                        onClick={() =>
-                                                          expand(
-                                                            account.id,
-                                                            page.value - 1,
-                                                          )
-                                                        }
+                                                        onClick={() => searching.value ? searchPage.value-- : expand(account.id, page.value - 1)}
                                                       >
                                                         {"Previous"}
                                                       </Button>
-                                                      <span>{page.value}</span>
+                                                      <span>{searching.value ? searchPage.value : page.value}</span>
                                                       <Button
                                                         variant={"secondary"}
                                                         disabled={
                                                           busy.value ||
-                                                          !hasMore.value
+                                                          (searching.value ? searchPage.value * browseSize >= filtered.value.length : !hasMore.value)
                                                         }
-                                                        onClick={() =>
-                                                          expand(
-                                                            account.id,
-                                                            page.value + 1,
-                                                          )
-                                                        }
+                                                        onClick={() => searching.value ? searchPage.value++ : expand(account.id, page.value + 1)}
                                                       >
                                                         {"Next"}
                                                       </Button>

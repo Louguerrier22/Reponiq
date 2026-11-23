@@ -63,6 +63,11 @@
 
 .ui-field { display: grid; gap: 6px; min-width: 0; font-size: var(--body-text); }
 .ui-field select { width: 100%; min-height: var(--control-height); padding: 5px 8px; border-radius: var(--radius); }
+.account-fields { display: flex; flex-wrap: wrap; gap: var(--control-gap); padding: 14px 20px; }
+.account-fields [data-slot="native-select-wrapper"] { min-width: 0; width: 100%; }
+.account-fields [data-slot="native-select"] { padding-inline-end: 36px; }
+.account-git-note { margin: 0; padding: 0 20px 16px; color: var(--muted-foreground); }
+.account-row .account-avatar, .account-row .account-info small { color: var(--muted-foreground); }
 [data-slot="switch"][data-state="unchecked"] { border-color: var(--border); }
 [data-slot="switch"][data-state="unchecked"] [data-slot="switch-thumb"] { background: var(--muted-foreground); }
 [data-slot="switch"][data-state="checked"] [data-slot="switch-thumb"] { background: var(--primary-foreground); }
@@ -140,11 +145,9 @@
 
 .repository-tabs[data-slot="tabs-list"] {
   display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(max-content, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr));
   width: 100%;
   height: auto;
-  overflow-x: auto;
   gap: 4px;
   padding: 2px;
 }
@@ -170,12 +173,15 @@
   align-items: center;
   justify-content: center;
   gap: 7px;
+  height: auto;
+  min-width: 0;
   min-height: var(--control-height);
   border-radius: max(2px, calc(var(--radius) - 4px));
   border: 1px solid transparent;
   font-size: var(--body-text);
-  white-space: nowrap;
+  white-space: normal;
 }
+.workbench-main .repository-tabs > button::after { display: none; }
 .workbench-main .repository-tabs > button[data-state="active"] {
   background: color-mix(in srgb,var(--primary) 19%,var(--card));
   color: var(--foreground);
@@ -185,8 +191,8 @@
   color: var(--foreground);
   border-radius: max(2px, calc(var(--radius) - 5px));
 }
-.repository-workflows { display: grid; gap: 16px; }
-.repository-workflows > button { justify-self: start; }
+.repository-activity { display: grid; gap: 16px; }
+.repository-activity > button { justify-self: start; }
 .reponiq-toaster { --width: 320px !important; }
 .reponiq-toaster [data-sonner-toast] { padding: 10px; }
 .reponiq-toaster [data-close-button] { left: auto; right: 8px; transform: none; }
@@ -224,9 +230,6 @@
 :root[data-theme-custom] :is(.pill.yellow,.changed-file b) { background: var(--warning-surface); }
 :root[data-theme-custom] .changed-file b.change-added { color: var(--diff-add-foreground); background: var(--diff-add); }
 :root[data-theme-custom] :is(.changed-file b.change-deleted,.changed-file b.change-conflict,.pill.red) { color: var(--diff-remove-foreground); background: var(--diff-remove); }
-:root[data-theme-custom] [data-slot="checkbox"] { background: var(--input); border-color: var(--border); }
-:root[data-theme-custom] [data-slot="checkbox"][aria-checked="true"] { background: var(--primary); border-color: var(--primary); }
-:root[data-theme-custom] [data-slot="checkbox"]::before { border-color: var(--primary-foreground); }
 :root[data-theme-custom] :is(.diff-hunk,.diff-context) { color: var(--foreground); background: var(--input); }
 :root[data-theme-custom] :is(.card-footer,.activity-day li,.panel-title,.account-row,.sidebar-bottom,.repo-actions,.file-change-row) { border-color: var(--border); }
 :root[data-theme-custom] :focus-visible { outline-color: var(--ring); }
@@ -244,9 +247,9 @@
   .changes-workbench .diff-code { min-height: 160px; max-height: 280px; }
 }
 @media(forced-colors: active) {
-  :root[data-theme-custom] [data-slot="checkbox"] { color: ButtonText; background: Canvas; border-color: ButtonText; }
-  :root[data-theme-custom] [data-slot="checkbox"][aria-checked="true"] { color: HighlightText; background: Highlight; border-color: Highlight; }
-  :root[data-theme-custom] [data-slot="checkbox"]::before { border-color: HighlightText; }
+  [data-slot="checkbox"] { forced-color-adjust: none; color: ButtonText; background: Canvas; border-color: ButtonText; }
+  [data-slot="checkbox"]:is([data-state="checked"], [data-state="indeterminate"]) { color: HighlightText; background: Highlight; border-color: Highlight; }
+  [data-slot="checkbox"]:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
 }
 @media(min-width: 901px) {
   :root[data-theme-text="large"] .sidebar button { font-size: var(--body-text); }
