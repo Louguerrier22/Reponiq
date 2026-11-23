@@ -87,8 +87,9 @@
   [data-sidebar="sidebar"][data-mobile="true"] .side-head {
     justify-content: space-between;
   }
-  [data-sidebar="sidebar"][data-mobile="true"] .app-updates {
+  [data-sidebar="sidebar"][data-mobile="true"] .sidebar-bottom > button {
     font-size: 14px;
+    justify-content: flex-start;
     padding-inline: 12px;
   }
 }
