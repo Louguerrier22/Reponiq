@@ -501,11 +501,16 @@ pub async fn list_online_repos(
     let _guard = oauth::lock_account().await?;
     let api = api(account_id, state).await?;
     api.user().await?;
-    let per_page = if catalog == Some(true) { 100 } else { 25 };
+    let (per_page, sort, direction) = if catalog == Some(true) {
+        // Ordinary repository updates must not move rows between search pages.
+        (100, "full_name", "asc")
+    } else {
+        (25, "updated", "desc")
+    };
     let (items, has_more) = api
         .request(
             reqwest::Method::GET,
-            &format!("/user/repos?per_page={per_page}&page={page}&sort=updated&direction=desc"),
+            &format!("/user/repos?per_page={per_page}&page={page}&sort={sort}&direction={direction}"),
             None,
         )
         .await?;

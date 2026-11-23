@@ -31,7 +31,7 @@ export default function ActivityHistory({ items, selectedId, onSelect }: Props) 
   const groups = new Map<string, ActivityItem[]>();
 
   for (const item of items) {
-    if (filter !== "all" && item.kind !== filter) continue;
+    if (filter !== "all" && item.kind !== filter && item.id !== selectedId) continue;
     const key = day.format(item.occurred_at * 1000);
     const events = groups.get(key);
     if (events) events.push(item);
@@ -56,7 +56,12 @@ export default function ActivityHistory({ items, selectedId, onSelect }: Props) 
       {items.length > 0 && (
         <div className="activity-filter">
           <Label htmlFor="activity-type">Event type</Label>
-          <NativeSelect id="activity-type" value={filter} onValueChange={setFilter}>
+          <NativeSelect id="activity-type" value={filter} onValueChange={(value) => {
+            setFilter(value);
+            if (value !== "all" && items.some((item) => item.id === selectedId && item.kind !== value)) {
+              onSelect(null);
+            }
+          }}>
             <SelectOption value="all">All events</SelectOption>
             {Object.entries(kinds).map(([key, kind]) => (
               <SelectOption key={key} value={key}>{kind.label}</SelectOption>
