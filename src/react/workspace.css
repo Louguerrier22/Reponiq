@@ -312,3 +312,15 @@
 .overview-collection-card small {
   color: var(--muted-foreground);
 }
+
+:is(.changes-header, .changes-actions, .changes-tab, .history-workbench, .activity-feed,
+    .overview-collections, .overview-view-toggle)
+  :is(button, input, select, textarea):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+:is(.changes-tab, .history-workbench) .diff-code:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
