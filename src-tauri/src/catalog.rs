@@ -510,7 +510,9 @@ pub async fn list_online_repos(
     let (items, has_more) = api
         .request(
             reqwest::Method::GET,
-            &format!("/user/repos?per_page={per_page}&page={page}&sort={sort}&direction={direction}"),
+            &format!(
+                "/user/repos?per_page={per_page}&page={page}&sort={sort}&direction={direction}"
+            ),
             None,
         )
         .await?;
