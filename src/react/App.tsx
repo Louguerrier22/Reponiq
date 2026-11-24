@@ -33,6 +33,7 @@ import {
   GitFailure,
   api,
   filteredRepos,
+  readablePath,
   type Account,
   type Activity as ActivityItem,
   type AppPreferences,
@@ -200,6 +201,10 @@ function createView(lifecycle: Lifecycle<Props>) {
   let showQuick = state(false),
     showRepoSettings = state(false),
     locating = state<Repo | null>(null);
+  const changingRoot = state(false);
+  const renaming = state<{ repo: Repo; name: string } | null>(null);
+  const removing = state<{ repo: Repo; deleteFolder: boolean } | null>(null);
+  const repoDialogError = state("");
   let repoContext = state<RepoContext | null>(null),
     recentBranches = state<string[]>([]);
   let defaultCommit = state<{
@@ -1566,29 +1571,40 @@ function createView(lifecycle: Lifecycle<Props>) {
     );
     if (["pull", "merge_upstream"].includes(task.action)) void loadMetadata();
   }
-  async function removeRepo(repo: Repo) {
-    const id = repo.id;
-    if (
-      !(await confirm({
-        title: `Remove ${repo.name} from Reponiq?`,
-        description: "The repository files stay in their folder.",
-        action: "Remove from workspace",
-        destructive: true,
-      }))
-    )
-      return;
-    await act(async () => {
-      await api.remove(id);
+  function openRemoveRepo(repo: Repo) {
+    repoDialogError.value = "";
+    removing.value = { repo, deleteFolder: false };
+  }
+
+  async function manageRepository(action: "rename" | "remove") {
+    const rename = renaming.value;
+    const remove = removing.value;
+    if (working.value || (action === "rename" ? !rename : !remove)) return;
+    repoDialogError.value = "";
+    const success = await act(async () => {
+      if (action === "rename" && rename) {
+        await api.renameRepo(targetOf(rename.repo), rename.name.trim());
+        return;
+      }
+      if (!remove) return;
+      const { repo, deleteFolder } = remove;
+      await api.remove(targetOf(repo), deleteFolder);
       forgetRepositoryDrafts(repo);
-      delete launchFailures.value[id];
-      if (selected.value === id) {
+      delete launchFailures.value[repo.id];
+      if (selected.value === repo.id) {
         selected.value = null;
         details.value = null;
         message.value = "";
         diffLoading.value = false;
         ++diffSequence;
       }
-    }, "Repository removed");
+    }, action === "rename" ? "Repository renamed" : "Repository removed");
+    if (success) {
+      renaming.value = null;
+      removing.value = null;
+    } else {
+      repoDialogError.value = error.value;
+    }
   }
   async function disconnectAccount(account: Account) {
     if (
@@ -2166,73 +2182,81 @@ function createView(lifecycle: Lifecycle<Props>) {
                               <GitBranch size={16} />
                               <span>{currentRepo.branch}</span>
                             </ShadcnButton>
-                            {details.value ? (
-                              <>
-                                <div
-                                  role="group"
-                                  aria-label="Branch actions"
-                                  data-tour="sync"
-                                  className="repo-sync-buttons"
-                                >
-                                  {(() => {
-                                    const actions = [
-                                      ...(details.value.saved_changes.length ? [{
-                                        label: `Saved changes (${details.value.saved_changes.length})`,
-                                        disabled: working.value,
-                                        select: () => (showSavedChanges.value = true),
-                                      }] : []),
-                                      ...(canStash.value ? [{
-                                        label: "Stash changes",
-                                        disabled: false,
-                                        select: () => runGit("stash_changes"),
-                                      }] : []),
-                                      ...(syncAction.value && syncAction.value.action !== "fetch" ? [{
-                                        label: "Fetch",
-                                        disabled: !canFetch.value,
-                                        select: () => runGit("fetch"),
-                                      }] : []),
-                                    ];
-                                    if (activeTab.value !== "changes") {
-                                      return actions.map(({ label, disabled, select }) => (
-                                        <ShadcnButton key={label} variant="outline" disabled={disabled} onClick={select}>
-                                          {label === "Fetch" && <RefreshCw size={14} />}
-                                          {label}
-                                        </ShadcnButton>
-                                      ));
-                                    }
-                                    if (!actions.length) return null;
-                                    return (
-                                      <Popover>
-                                        <PopoverTrigger asChild>
-                                          <ShadcnButton variant="ghost">More actions</ShadcnButton>
-                                        </PopoverTrigger>
-                                        <PopoverContent align="end" className="changes-actions" aria-label="More branch actions">
-                                          {actions.map(({ label, disabled, select }) => (
-                                            <PopoverClose key={label} asChild>
-                                              <ShadcnButton variant="ghost" disabled={disabled} onClick={select}>
-                                                {label}
-                                              </ShadcnButton>
-                                            </PopoverClose>
-                                          ))}
-                                        </PopoverContent>
-                                      </Popover>
-                                    );
-                                  })()}
-                                  {syncAction.value ? (
-                                      <ShadcnButton
-                                        variant={activeTab.value === "changes" && currentRepo.dirty ? "outline" : "default"}
-                                        disabled={!canFetch.value}
-                                        onClick={() =>
-                                          confirmGit(syncAction.value!.action)
-                                        }
-                                      >
-                                        <syncAction.value.icon size={14} />{" "}
-                                        {syncAction.value.label}
+                            <div
+                              role="group"
+                              aria-label="Repository actions"
+                              data-tour="sync"
+                              className="repo-sync-buttons"
+                            >
+                              {(() => {
+                                const actions = [
+                                  ...(details.value?.saved_changes.length ? [{
+                                    label: `Saved changes (${details.value.saved_changes.length})`,
+                                    disabled: working.value,
+                                    select: () => (showSavedChanges.value = true),
+                                  }] : []),
+                                  ...(canStash.value ? [{
+                                    label: "Stash changes",
+                                    disabled: false,
+                                    select: () => runGit("stash_changes"),
+                                  }] : []),
+                                  ...(syncAction.value && syncAction.value.action !== "fetch" ? [{
+                                    label: "Fetch",
+                                    disabled: !canFetch.value,
+                                    select: () => runGit("fetch"),
+                                  }] : []),
+                                ];
+                                const repositoryActions = [
+                                  { label: "Rename", disabled: working.value, select: () => {
+                                    repoDialogError.value = "";
+                                    renaming.value = { repo: currentRepo, name: currentRepo.name };
+                                  } },
+                                  { label: "Change root folder", disabled: working.value, select: () => {
+                                    changingRoot.value = true;
+                                    locating.value = currentRepo;
+                                  } },
+                                  { label: "Remove", disabled: working.value, select: () => openRemoveRepo(currentRepo) },
+                                ];
+                                const changesTab = activeTab.value === "changes";
+                                const menuActions = changesTab ? [...actions, ...repositoryActions] : repositoryActions;
+                                return (
+                                  <>
+                                    {!changesTab && actions.map(({ label, disabled, select }) => (
+                                      <ShadcnButton key={label} variant="outline" disabled={disabled} onClick={select}>
+                                        {label === "Fetch" && <RefreshCw size={14} />}
+                                        {label}
                                       </ShadcnButton>
-                                  ) : null}
-                                </div>
-                              </>
-                            ) : null}
+                                    ))}
+                                    <Popover>
+                                      <PopoverTrigger asChild>
+                                        <ShadcnButton variant="ghost">More actions</ShadcnButton>
+                                      </PopoverTrigger>
+                                      <PopoverContent align="end" className="changes-actions" aria-label="More repository actions">
+                                        {menuActions.map(({ label, disabled, select }) => (
+                                          <PopoverClose key={label} asChild>
+                                            <ShadcnButton variant="ghost" disabled={disabled} onClick={select}>
+                                              {label}
+                                            </ShadcnButton>
+                                          </PopoverClose>
+                                        ))}
+                                      </PopoverContent>
+                                    </Popover>
+                                  </>
+                                );
+                              })()}
+                              {syncAction.value ? (
+                                  <ShadcnButton
+                                    variant={activeTab.value === "changes" && currentRepo.dirty ? "outline" : "default"}
+                                    disabled={!canFetch.value}
+                                    onClick={() =>
+                                      confirmGit(syncAction.value!.action)
+                                    }
+                                  >
+                                    <syncAction.value.icon size={14} />{" "}
+                                    {syncAction.value.label}
+                                  </ShadcnButton>
+                              ) : null}
+                            </div>
                           </div>
                         </div>
                         <Tabs.Root
@@ -3257,7 +3281,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                         ) : null}
                         <Button
                           disabled={working.value}
-                          onClick={() => removeRepo(currentRepo)}
+                          onClick={() => openRemoveRepo(currentRepo)}
                           className={cn("remove-repo")}
                         >
                           <X size={13} />
@@ -4844,18 +4868,67 @@ function createView(lifecycle: Lifecycle<Props>) {
             </Modal>
           </>
         ) : null}
+        {renaming.value && (
+          <Modal label="Rename repository" canClose={!working.value} onclose={() => (renaming.value = null)}>
+            <h2>Rename repository</h2>
+            <form onSubmit={(event) => { event.preventDefault(); void manageRepository("rename"); }}>
+              <Label htmlFor="repository-display-name">Name</Label>
+              <Input
+                id="repository-display-name"
+                autoFocus
+                disabled={working.value}
+                value={renaming.value.name}
+                onValueChange={(name) => {
+                  if (renaming.value) renaming.value = { ...renaming.value, name };
+                }}
+              />
+              {repoDialogError.value && <p role="alert" className="connection-error">{repoDialogError.value}</p>}
+              <div className="modal-actions">
+                <Button variant="secondary" type="button" disabled={working.value} onClick={() => (renaming.value = null)}>Cancel</Button>
+                <Button variant="primary" type="submit" disabled={working.value || !renaming.value.name.trim()}>Rename</Button>
+              </div>
+            </form>
+          </Modal>
+        )}
+        {removing.value && (
+          <Modal label="Remove repository" canClose={!working.value} onclose={() => (removing.value = null)}>
+            <h2>Remove {removing.value.repo.name}?</h2>
+            <p>{readablePath(removing.value.repo.path)}</p>
+            <Label className="scope-choice" htmlFor="delete-repository-folder">
+              <Switch
+                id="delete-repository-folder"
+                checked={removing.value.deleteFolder}
+                disabled={working.value}
+                onCheckedChange={(deleteFolder) => {
+                  if (removing.value) removing.value = { ...removing.value, deleteFolder };
+                }}
+              />
+              Delete the full folder
+            </Label>
+            <p>{removing.value.deleteFolder ? "This permanently deletes the Git repository and all files in the folder." : "The folder and its files will stay on this device."}</p>
+            {repoDialogError.value && <p role="alert" className="connection-error">{repoDialogError.value}</p>}
+            <div className="modal-actions">
+              <Button variant="secondary" disabled={working.value} onClick={() => (removing.value = null)}>Cancel</Button>
+              <ShadcnButton variant="destructive" disabled={working.value} onClick={() => void manageRepository("remove")}>
+                {removing.value.deleteFolder ? "Delete folder and remove" : "Remove from Reponiq"}
+              </ShadcnButton>
+            </div>
+          </Modal>
+        )}
         {locating.value ? (
           <>
             <LocateRepo
               repo={locating.value}
+              changeRoot={changingRoot.value}
               mainWorktree={
                 metadata.value.get(locating.value.id)?.main_worktree
               }
-              onclose={() => (locating.value = null)}
+              onclose={() => { locating.value = null; changingRoot.value = false; }}
               onlocated={async () => {
                 const previous = locating.value;
                 if (!previous) return;
                 locating.value = null;
+                changingRoot.value = false;
                 statusVersions.set(
                   previous.id,
                   (statusVersions.get(previous.id) ?? 0) + 1,
@@ -4868,6 +4941,7 @@ function createView(lifecycle: Lifecycle<Props>) {
               }}
               onadded={async (repo) => {
                 locating.value = null;
+                changingRoot.value = false;
                 await repositoryAdded(repo);
               }}
             />
