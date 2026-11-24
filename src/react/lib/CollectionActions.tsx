@@ -21,6 +21,7 @@ export function useCollectionDrag(name: string, onMove: CollectionMove, inGrid =
 
   function onPointerDown(event: PointerEvent<HTMLButtonElement>) {
     if (!event.isPrimary || event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
     suppressClick.current = false;
     drag.current = { pointer: event.pointerId, x: event.clientX, y: event.clientY, moved: false };
   }
@@ -31,7 +32,6 @@ export function useCollectionDrag(name: string, onMove: CollectionMove, inGrid =
     if (Math.hypot(event.clientX - start.x, event.clientY - start.y) < 5) return;
     start.moved = true;
     suppressClick.current = true;
-    event.currentTarget.setPointerCapture(event.pointerId);
   }
 
   function onPointerUp(event: PointerEvent<HTMLButtonElement>) {
