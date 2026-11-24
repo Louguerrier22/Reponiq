@@ -13,6 +13,7 @@
     "windows": [
       {
         "title": "Reponiq",
+        "dragDropEnabled": false,
         "width": 1370,
         "height": 870,
         "minWidth": 760,

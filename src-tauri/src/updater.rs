@@ -60,22 +60,51 @@ async fn available_versions(
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(super::err)?;
-    let mut response = client
-        .get(CATALOG)
-        .send()
+    let mut releases = Vec::new();
+    let mut remaining_bytes = 16 * 1024 * 1024;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    for page in 1..=10 {
+        let (entries, has_next) = tokio::time::timeout_at(deadline, async {
+            let mut response = client
+                .get(CATALOG)
+                .query(&[("page", page)])
+                .send()
+                .await
+                .map_err(|_| FAILURE.to_string())?
+                .error_for_status()
+                .map_err(|_| FAILURE.to_string())?;
+            let has_next = response
+                .headers()
+                .get_all(reqwest::header::LINK)
+                .iter()
+                .filter_map(|value| value.to_str().ok())
+                .flat_map(|value| value.split(','))
+                .any(|link| {
+                    link.split(';')
+                        .skip(1)
+                        .any(|parameter| parameter.trim() == "rel=\"next\"")
+                });
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response.chunk().await.map_err(|_| FAILURE.to_string())? {
+                if chunk.len() > remaining_bytes {
+                    return Err(FAILURE.into());
+                }
+                remaining_bytes -= chunk.len();
+                bytes.extend_from_slice(&chunk);
+            }
+            let entries: Vec<ReleaseEntry> = serde_json::from_slice(&bytes).map_err(super::err)?;
+            Ok::<_, String>((entries, has_next))
+        })
         .await
-        .map_err(|_| FAILURE.to_string())?
-        .error_for_status()
-        .map_err(|_| FAILURE.to_string())?;
-    let limit = 4 * 1024 * 1024;
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| FAILURE.to_string())? {
-        if chunk.len() > limit - bytes.len() {
-            return Err(FAILURE.into());
+        .map_err(|_| FAILURE.to_string())??;
+        releases.extend(entries);
+        if !has_next {
+            break;
         }
-        bytes.extend_from_slice(&chunk);
+        if page == 10 {
+            return Err("The release catalog exceeded the update check limit.".into());
+        }
     }
-    let releases: Vec<ReleaseEntry> = serde_json::from_slice(&bytes).map_err(super::err)?;
     let current = version_tuple(&app.package_info().version.to_string()).ok_or(FAILURE)?;
     let mut versions: Vec<_> = releases
         .into_iter()

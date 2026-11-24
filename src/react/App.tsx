@@ -891,6 +891,7 @@ function createView(lifecycle: Lifecycle<Props>) {
     } catch (reason) {
       error.value = String(reason);
     } finally {
+      ++collectionRevision;
       collectionPending.value = false;
     }
   }
@@ -920,6 +921,7 @@ function createView(lifecycle: Lifecycle<Props>) {
     } catch (reason) {
       collectionError.value = String(reason);
     } finally {
+      ++collectionRevision;
       collectionPending.value = false;
     }
   }
@@ -1861,6 +1863,9 @@ function createView(lifecycle: Lifecycle<Props>) {
     else void runGit(action);
   }
   lifecycle.mount(() => {
+    // The embedded browser should never navigate when a file is dropped.
+    const preventDropNavigation = (event: DragEvent) => event.preventDefault();
+    window.addEventListener("drop", preventDropNavigation);
     void load();
     void loadMetadata();
     void loadWorkflowApp();
@@ -1916,6 +1921,7 @@ function createView(lifecycle: Lifecycle<Props>) {
     document.addEventListener("visibilitychange", focus);
     return () => {
       alive = false;
+      window.removeEventListener("drop", preventDropNavigation);
       statusQueue.clear();
       clearTimeout(noticeTimer);
       media.removeEventListener("change", readSystemTheme);
