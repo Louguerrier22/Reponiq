@@ -80,6 +80,7 @@ import {
 } from "./controller";
 import { Github } from "./icons";
 import ActivityHistory, { activityTitle } from "./lib/ActivityHistory";
+import { CollectionActions, collectionDragStart, collectionDropTarget } from "./lib/CollectionActions";
 import CollectionMenuItem from "./lib/CollectionMenuItem";
 import AccountsSettings from "./lib/AccountsSettings";
 import AppUpdates, { AppUpdateButton } from "./lib/AppUpdates";
@@ -796,7 +797,7 @@ function createView(lifecycle: Lifecycle<Props>) {
   }
   async function openLocation(
     repo: Repo,
-    action: "editor" | "terminal" | "folder" | "worktree",
+    action: Parameters<typeof api.openRepoLocation>[1],
     reference: string | null = null,
   ) {
     try {
@@ -804,6 +805,35 @@ function createView(lifecycle: Lifecycle<Props>) {
     } catch (reason) {
       error.value = String(reason);
     }
+  }
+  function openMenu(repo: Repo, file?: string) {
+    const actions = file ? [
+      { label: "Open with default app", action: "fileDefault" },
+      { label: "Open in editor", action: "fileEditor" },
+      { label: "Show in file manager", action: "fileFolder" },
+    ] as const : [
+      { label: "Open repository folder", action: "folder" },
+      { label: "Open in editor", action: "editor" },
+      { label: "Open in terminal", action: "terminal" },
+    ] as const;
+    return (
+      <Popover>
+        <PopoverTrigger asChild>
+          <ShadcnButton variant="outline" aria-label={file ? "Open selected file" : "Open repository"}>
+            Open
+          </ShadcnButton>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="changes-actions">
+          {actions.map(({ label, action }) => (
+            <PopoverClose key={action} asChild>
+              <ShadcnButton variant="ghost" onClick={() => void openLocation(repo, action, file)}>
+                {label}
+              </ShadcnButton>
+            </PopoverClose>
+          ))}
+        </PopoverContent>
+      </Popover>
+    );
   }
   async function arrangePin(repo: Repo, earlier: boolean) {
     try {
@@ -814,11 +844,79 @@ function createView(lifecycle: Lifecycle<Props>) {
     }
   }
   const pinned = derived(() => repos.value.filter((r) => r.pinned).length);
-  const collections = derived(() => [
-    ...new Set(
-      repos.value.map((r) => r.collection).filter((x): x is string => !!x),
-    ),
-  ]);
+  const collectionOrder = state<string[]>([]);
+  let collectionRevision = 0;
+  const collectionPending = state(false);
+  const collectionEdit = state<{ kind: "rename" | "delete"; current: string; name: string } | null>(null);
+  const collectionError = state("");
+  const collections = derived(() => {
+    const names = new Set(repos.value.flatMap((repo) => repo.collection ? [repo.collection] : []));
+    const ordered = collectionOrder.value.filter((name) => names.delete(name));
+    return [...ordered, ...names];
+  });
+  function collectionActions(name: string) {
+    const names = collections.value;
+    const index = names.indexOf(name);
+    const previous = names[index - 1];
+    const next = names[index + 1];
+    function edit(kind: "rename" | "delete") {
+      collectionError.value = "";
+      collectionEdit.value = { kind, current: name, name };
+    }
+    return {
+      name,
+      onRename: () => edit("rename"),
+      onDelete: () => edit("delete"),
+      moveEarlier: previous ? () => void moveCollection(name, previous, false) : undefined,
+      moveLater: next ? () => void moveCollection(name, next, true) : undefined,
+    };
+  }
+  async function moveCollection(source: string, destination: string, after: boolean) {
+    if (collectionPending.value || source === destination || !collections.value.includes(source)) return;
+    const names = collections.value.filter((name) => name !== source);
+    const index = names.indexOf(destination);
+    if (index < 0) return;
+    names.splice(index + Number(after), 0, source);
+    if (names.every((name, position) => name === collections.value[position])) return;
+    collectionPending.value = true;
+    ++collectionRevision;
+    try {
+      collectionOrder.value = await api.manageCollections({ kind: "reorder", names });
+    } catch (reason) {
+      error.value = String(reason);
+    } finally {
+      collectionPending.value = false;
+    }
+  }
+  async function saveCollection() {
+    const edit = collectionEdit.value;
+    if (!edit || collectionPending.value) return;
+    const name = edit.kind === "rename" ? edit.name.trim() : null;
+    if (name === "") return;
+    collectionError.value = "";
+    collectionPending.value = true;
+    ++collectionRevision;
+    try {
+      const order = await api.manageCollections(edit);
+      for (const repo of repos.value) {
+        if (repo.collection === edit.current) changedMetadata(repo.id);
+      }
+      repos.value = repos.value.map((repo) =>
+        repo.collection === edit.current ? { ...repo, collection: name } : repo,
+      );
+      collectionOrder.value = order;
+      if (view.value === "collection:" + edit.current) {
+        view.value = name ? "collection:" + name : "all";
+        query.value = "";
+      }
+      collectionEdit.value = null;
+      showNotice(edit.kind === "rename" ? "Collection renamed" : "Collection deleted");
+    } catch (reason) {
+      collectionError.value = String(reason);
+    } finally {
+      collectionPending.value = false;
+    }
+  }
   const overviewMode = derived(() =>
     collections.value.length ? (overviewChoice.value ?? "collections") : "all",
   );
@@ -831,7 +929,9 @@ function createView(lifecycle: Lifecycle<Props>) {
       if (repo.collection) counts.set(repo.collection, (counts.get(repo.collection) ?? 0) + 1);
     }
     const search = query.value.trim().toLocaleLowerCase();
-    return [...counts].filter(([name]) => name.toLocaleLowerCase().includes(search));
+    return collections.value
+      .filter((name) => name.toLocaleLowerCase().includes(search))
+      .map((name) => [name, counts.get(name) ?? 0] as const);
   });
   const date = (sec: number) =>
     new Date(sec * 1000).toLocaleString(undefined, {
@@ -845,7 +945,11 @@ function createView(lifecycle: Lifecycle<Props>) {
   let supplementaryFlight: Promise<void> | null = null;
   function loadSupplementary() {
     if (supplementaryFlight) return;
+    const orderRevision = collectionRevision;
     supplementaryFlight = Promise.allSettled([
+      api.collectionOrder().then((order) => {
+        if (alive && !collectionPending.value && orderRevision === collectionRevision) collectionOrder.value = order;
+      }),
       api.activity().then((rows) => {
         if (alive) activities.value = rows;
       }),
@@ -1927,6 +2031,8 @@ function createView(lifecycle: Lifecycle<Props>) {
                       <CollectionMenuItem
                         key={name}
                         name={name}
+                        actions={collectionActions(name)}
+                        onMove={moveCollection}
                         repositories={orderRepos(members.get(name) ?? [])}
                         active={view.value === "collection:" + name && selected.value === null}
                         selectedRepo={selected.value}
@@ -2256,7 +2362,8 @@ function createView(lifecycle: Lifecycle<Props>) {
                                     {syncAction.value.label}
                                   </ShadcnButton>
                               ) : null}
-                            </div>
+                              {openMenu(currentRepo)}
+                              </div>
                           </div>
                         </div>
                         <Tabs.Root
@@ -2776,16 +2883,21 @@ function createView(lifecycle: Lifecycle<Props>) {
                                                 {selectedFile.value ??
                                                   "Working tree"}
                                               </span>
-                                              <Button
-                                                aria-pressed={selectedFile.value === null}
-                                                disabled={selectedFile.value === null && !diffError.value}
-                                                onClick={() =>
-                                                  showDiff(null, currentRepo.id)
-                                                }
-                                                className={cn("text-action")}
-                                              >
-                                                {"All changes"}
-                                              </Button>
+                                              <div className="diff-header-actions">
+                                                {selectedFile.value && details.value?.changes.some((change) =>
+                                                  change.path === selectedFile.value && change.y !== "D" && (change.x !== "D" || change.y === "?")
+                                                ) && openMenu(currentRepo, selectedFile.value)}
+                                                <Button
+                                                  aria-pressed={selectedFile.value === null}
+                                                  disabled={selectedFile.value === null && !diffError.value}
+                                                  onClick={() =>
+                                                    showDiff(null, currentRepo.id)
+                                                  }
+                                                  className={cn("text-action")}
+                                                >
+                                                  {"All changes"}
+                                                </Button>
+                                              </div>
                                             </div>
                                             {diffLoading.value ? (
                                               <>
@@ -3488,7 +3600,8 @@ function createView(lifecycle: Lifecycle<Props>) {
                               return (
                                 <>
                                   <div className={cn("page-heading")}>
-                                    <div>
+                                    <div className="collection-title">
+                                      {view.value.startsWith("collection:") && <CollectionActions {...collectionActions(view.value.slice(11))} />}
                                       <h1 className={cn("overview-title")}>
                                         {view.value === "pinned"
                                           ? "Pinned repositories"
@@ -3648,8 +3761,12 @@ function createView(lifecycle: Lifecycle<Props>) {
                                   {showCollectionShelf.value ? (
                                     <section aria-label="Collections" className="overview-collections">
                                       {collectionShelf.value.map(([name, count]) => (
-                                        <Card key={name} className="overview-collection-card">
+                                        <Card key={name} className="overview-collection-card" {...collectionDropTarget(name, moveCollection, true)}>
+                                          <CollectionActions {...collectionActions(name)} />
                                           <Button
+                                            className="overview-collection-open"
+                                            draggable
+                                            onDragStart={(event) => collectionDragStart(event, name)}
                                             onClick={() => {
                                               query.value = "";
                                               view.value = "collection:" + name;
@@ -4868,6 +4985,42 @@ function createView(lifecycle: Lifecycle<Props>) {
             </Modal>
           </>
         ) : null}
+        {collectionEdit.value && (
+          <Modal
+            label={collectionEdit.value.kind === "rename" ? "Rename collection" : "Delete collection"}
+            canClose={!collectionPending.value}
+            onclose={() => (collectionEdit.value = null)}
+          >
+            <h2>{collectionEdit.value.kind === "rename" ? "Rename collection" : `Delete ${collectionEdit.value.current}?`}</h2>
+            <form onSubmit={(event) => { event.preventDefault(); void saveCollection(); }}>
+              {collectionEdit.value.kind === "rename" ? (
+                <>
+                  <Label htmlFor="collection-new-name">Name</Label>
+                  <Input
+                    id="collection-new-name"
+                    autoFocus
+                    disabled={collectionPending.value}
+                    value={collectionEdit.value.name}
+                    onValueChange={(name) => {
+                      if (collectionEdit.value) collectionEdit.value = { ...collectionEdit.value, name };
+                    }}
+                  />
+                </>
+              ) : <p>Repositories will stay in Reponiq and move out of this collection.</p>}
+              {collectionError.value && <p role="alert" className="connection-error">{collectionError.value}</p>}
+              <div className="modal-actions">
+                <Button type="button" variant="secondary" disabled={collectionPending.value} onClick={() => (collectionEdit.value = null)}>Cancel</Button>
+                <ShadcnButton
+                  type="submit"
+                  variant={collectionEdit.value.kind === "delete" ? "destructive" : "default"}
+                  disabled={collectionPending.value || !collectionEdit.value.name.trim()}
+                >
+                  {collectionEdit.value.kind === "rename" ? "Rename" : "Delete collection"}
+                </ShadcnButton>
+              </div>
+            </form>
+          </Modal>
+        )}
         {renaming.value && (
           <Modal label="Rename repository" canClose={!working.value} onclose={() => (renaming.value = null)}>
             <h2>Rename repository</h2>

@@ -10,7 +10,9 @@ state,
 useController,
 type Lifecycle
 } from "../controller";
-import { Button } from "../ui";
+import { Button, Label, ToggleGroup } from "../ui";
+import { NativeSelect, NativeSelectOption } from "../shadcn/native-select";
+import { version as installedVersion } from "../../../package.json";
 import { cn } from "../utils";
 import Modal from "./Modal";
 const UpdatesContext = createContext({ ready: false, open: () => {} });
@@ -25,7 +27,8 @@ type BaseProps = {
   children: ReactNode;
   busy: boolean;
 };
-type Props = BaseProps & {};
+type Props = BaseProps;
+type Selection = { beta: boolean; version: string | null };
 function createView(lifecycle: Lifecycle<Props>) {
   const busy = derived(() => lifecycle.props().busy);
   type Status =
@@ -41,6 +44,57 @@ function createView(lifecycle: Lifecycle<Props>) {
   let installing = state(false);
   let open = state(false);
   let error = state("");
+  const selection = state<Selection>({ beta: false, version: null });
+  const saved = state<Selection | null>(null);
+  const versions = state<string[]>([]);
+  const loadingVersions = state(false);
+  const saving = state(false);
+  let request = 0;
+  async function loadVersions(beta: boolean) {
+    const id = ++request;
+    versions.value = [];
+    loadingVersions.value = true;
+    try {
+      const result = await invoke<string[]>("app_update_versions", { beta });
+      if (id === request) versions.value = result;
+    } catch (reason) {
+      if (id === request) error.value = String(reason);
+    } finally {
+      if (id === request) loadingVersions.value = false;
+    }
+  }
+  async function showUpdates() {
+    open.value = true;
+    try {
+      if (!saved.value) {
+        const value = await invoke<Selection>("app_update_selection");
+        saved.value = value;
+        selection.value = value;
+      }
+      if (status.value.state !== "unavailable") await loadVersions(selection.value.beta);
+    } catch (reason) {
+      error.value = String(reason);
+    }
+  }
+  const selectionChanged = derived(() => saved.value !== null && (
+    selection.value.beta !== saved.value.beta || selection.value.version !== saved.value.version
+  ));
+  async function saveSelection() {
+    if (saving.value || checking.value || installing.value || !selectionChanged.value) return;
+    saving.value = true;
+    error.value = "";
+    try {
+      const value = selection.value;
+      await invoke("set_app_update_selection", { selection: value });
+      saved.value = value;
+      status.value = { state: "current" };
+      await check();
+    } catch (reason) {
+      error.value = String(reason);
+    } finally {
+      saving.value = false;
+    }
+  }
   async function check() {
     if (checking.value || installing.value || status.value.state === "ready")
       return;
@@ -148,7 +202,7 @@ function createView(lifecycle: Lifecycle<Props>) {
   });
   return () => (
     <>
-      <UpdatesContext.Provider value={{ready:status.value.state==="ready",open:()=>{open.value=true;}}}>
+      <UpdatesContext.Provider value={{ready:status.value.state==="ready",open:()=>{void showUpdates();}}}>
         {lifecycle.props().children}
       </UpdatesContext.Provider>
       {open.value ? (
@@ -158,7 +212,40 @@ function createView(lifecycle: Lifecycle<Props>) {
             canClose={!installing.value}
             onclose={() => (open.value = false)}
           >
-            <h2>{"App updates"}</h2>
+            <h2>App updates</h2>
+            <p>Installed version {installedVersion}</p>
+            {saved.value && status.value.state !== "unavailable" && (
+              <div className="grid gap-2">
+                <ToggleGroup
+                  label="Update channel"
+                  options={[{ value: "release", label: "Release" }, { value: "beta", label: "Beta" }]}
+                  value={selection.value.beta ? "beta" : "release"}
+                  disabled={checking.value || installing.value || saving.value}
+                  onchange={(channel) => {
+                    const beta = channel === "beta";
+                    selection.value = { beta, version: null };
+                    error.value = "";
+                    void loadVersions(beta);
+                  }}
+                />
+                <Label htmlFor="app-update-version">Version</Label>
+                <NativeSelect
+                  id="app-update-version"
+                  value={selection.value.version ?? ""}
+                  disabled={loadingVersions.value || checking.value || installing.value || saving.value}
+                  onChange={(event) => (selection.value = { ...selection.value, version: event.target.value || null })}
+                >
+                  <NativeSelectOption value="">Latest in this channel</NativeSelectOption>
+                  {selection.value.version && !versions.value.includes(selection.value.version) && (
+                    <NativeSelectOption value={selection.value.version}>{selection.value.version}</NativeSelectOption>
+                  )}
+                  {versions.value.map((version) => (
+                    <NativeSelectOption key={version} value={version}>{version}</NativeSelectOption>
+                  ))}
+                </NativeSelect>
+                {loadingVersions.value && <p role="status">Loading versions…</p>}
+              </div>
+            )}
             {error.value ? (
               <>
                 <p role={"alert"} className={cn("connection-error")}>
@@ -223,7 +310,11 @@ function createView(lifecycle: Lifecycle<Props>) {
               >
                 {"Close"}
               </Button>
-              {status.value.state === "ready" ? (
+              {selectionChanged.value ? (
+                <Button variant="primary" disabled={saving.value || checking.value || installing.value} onClick={saveSelection}>
+                  Save and check
+                </Button>
+              ) : status.value.state === "ready" ? (
                 <>
                   <Button
                     variant={"primary"}

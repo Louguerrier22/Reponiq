@@ -6,6 +6,8 @@
 
 CI checks React, TypeScript and the native backend. It packages Windows NSIS and Linux AppImage, DEB and RPM. Verify the reviewed source, hosted checksums, and updater signatures for NSIS and AppImage before testing the exact packages. Record Windows and Linux runtime checks, including setup resume, update restart, full quit, and recovery. Publish only after candidate-bound security and release checks pass.
 
+Publish versions ending in `.0` as regular GitHub releases and nonzero patch versions as GitHub prereleases. Both channels use the full signed version and tag (`1.2.0` and `v1.2.0`, for example). App Updates lists newer published versions in the chosen channel with a manifest, matching installer and signature. The default is Release. Selecting a specific version pins the target until the user changes it. On installations before 1.2.5, use the GitHub installer to opt into the beta.
+
 ## Historical verification for 1.0.1
 
 Reponiq 1.0.1 is the follow-up to the consolidated v1 baseline, identified by tag v1.0.1. The release notes link the exact packaging run and source identity. SHA256SUMS.txt on that same release identifies the distributed Windows EXE and Linux deb/rpm/AppImage files. The published v1.0.0 baseline remains available.

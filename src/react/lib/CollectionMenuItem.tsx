@@ -1,5 +1,6 @@
 import { ChevronRight, Folder } from "lucide-react";
 import { useState } from "react";
+import { CollectionContextMenu, collectionDragStart, collectionDropTarget, type CollectionActionsProps, type CollectionMove } from "./CollectionActions";
 import type { Repo } from "../../lib/api";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../shadcn/collapsible";
 import {
@@ -15,13 +16,15 @@ import { Button } from "../ui";
 
 const pageSize = 5;
 
-export default function CollectionMenuItem({ name, repositories, active, selectedRepo, onOpen, onRepository }: {
+export default function CollectionMenuItem({ name, repositories, active, selectedRepo, onOpen, onRepository, actions, onMove }: {
   name: string;
   repositories: Repo[];
   active: boolean;
   selectedRepo: number | null;
   onOpen: () => void;
   onRepository: (id: number) => void;
+  actions: CollectionActionsProps;
+  onMove: CollectionMove;
 }) {
   const [open, setOpen] = useState(false);
   const [limit, setLimit] = useState(pageSize);
@@ -34,15 +37,25 @@ export default function CollectionMenuItem({ name, repositories, active, selecte
       if (!next) setLimit(pageSize);
     }}>
       <SidebarMenuItem className="collection-menu-item">
-        <SidebarMenuButton asChild isActive={active} tooltip={name}>
-          <Button title={name} className={active ? "active" : undefined} aria-current={active ? "page" : undefined} onClick={() => {
-            onOpen();
-            if (isMobile) setOpenMobile(false);
-          }}>
-            <Folder size={17} aria-hidden="true" />
-            <span>{name}</span>
-          </Button>
-        </SidebarMenuButton>
+        <CollectionContextMenu {...actions}>
+          <SidebarMenuButton asChild isActive={active} tooltip={name}>
+            <Button
+              draggable
+              onDragStart={(event) => collectionDragStart(event, name)}
+              {...collectionDropTarget(name, onMove)}
+              title={name}
+              className={active ? "active" : undefined}
+              aria-current={active ? "page" : undefined}
+              onClick={() => {
+                onOpen();
+                if (isMobile) setOpenMobile(false);
+              }}
+            >
+              <Folder size={17} aria-hidden="true" />
+              <span>{name}</span>
+            </Button>
+          </SidebarMenuButton>
+        </CollectionContextMenu>
         <CollapsibleTrigger asChild>
           <SidebarMenuAction type="button" className="collection-menu-expand" aria-label={toggleLabel} title={toggleLabel}>
             <ChevronRight size={15} aria-hidden="true" />

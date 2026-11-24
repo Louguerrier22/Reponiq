@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.5 (Beta)
+
+- Choose Release or Beta in App updates and select the latest or a specific newer version.
+- Reorder collections by dragging, or rename and delete them from their menus.
+- Open repositories and changed files in your default apps or configured editor.
+
 ## 1.2.4
 
 - Rename, change the root folder, or remove a repository from More actions.
