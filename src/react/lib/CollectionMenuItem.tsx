@@ -37,7 +37,7 @@ export default function CollectionMenuItem({ name, repositories, active, selecte
       setOpen(next);
       if (!next) setLimit(pageSize);
     }}>
-      <SidebarMenuItem className="collection-menu-item">
+      <SidebarMenuItem className="collection-menu-item" data-collection-item={name}>
         <CollectionContextMenu {...actions}>
           <SidebarMenuButton asChild isActive={active} tooltip={name}>
             <Button

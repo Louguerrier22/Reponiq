@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.6 (Beta)
+
+- Collections follow the pointer while dragging. The empty slot previews the new order in Overview and the sidebar, including when the pointer leaves the collection area.
+- Open in Terminal starts a visible console on Windows and prefers the desktop terminal on Linux. Individual files open with the operating system's default application.
+- Repository toolbar controls share a baseline and wrap in groups on narrower windows.
+
 ## 1.2.5 (Beta)
 
 - Choose Release or Beta in App updates and select the latest or a specific newer version.

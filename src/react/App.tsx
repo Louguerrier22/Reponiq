@@ -810,11 +810,10 @@ function createView(lifecycle: Lifecycle<Props>) {
   function locationActions(repo: Repo, file?: string) {
     return (file ? [
       { label: "Open with default app", action: "fileDefault" },
-      { label: "Open in editor", action: "fileEditor" },
       { label: "Show in file manager", action: "fileFolder" },
     ] as const : [
       { label: "Open repository folder", action: "folder" },
-      { label: "Open in editor", action: "editor" },
+      { label: "Open in configured editor", action: "editor" },
       { label: "Open in terminal", action: "terminal" },
     ] as const).map(({ label, action }) => ({
       label,
@@ -2253,53 +2252,55 @@ function createView(lifecycle: Lifecycle<Props>) {
                             </div>
                           </div>
                           <div className="repo-command-bar" role="group" aria-label="Repository controls">
-                            <ShadcnButton
-                              variant="ghost"
-                              size="icon"
-                              aria-label={
-                                currentRepo.pinned
-                                  ? "Unpin repository"
-                                  : "Pin repository"
-                              }
-                              disabled={pendingPins.value.includes(
-                                currentRepo.id,
-                              )}
-                              onClick={() => togglePin(currentRepo)}
-                            >
-                              <Pin
-                                size={16}
-                                fill={
-                                  currentRepo.pinned ? "currentColor" : "none"
+                            <div className="repo-organization-buttons" role="group" aria-label="Repository organization">
+                              <ShadcnButton
+                                variant="ghost"
+                                size="icon"
+                                aria-label={
+                                  currentRepo.pinned
+                                    ? "Unpin repository"
+                                    : "Pin repository"
                                 }
-                              />
-                            </ShadcnButton>
-                            <ShadcnButton
-                              data-tour="organize"
-                              variant="outline"
-                              disabled={working.value}
-                              onClick={() => openOrganization(currentRepo)}
-                            >
-                              <Tags size={15} />
-                              {" Organize"}
-                            </ShadcnButton>
-                            {launchPreferences.value && (
-                              <ShadcnField
-                                orientation="horizontal"
-                                className="repo-fetch-switch"
-                                title={launchPreferences.value.enabled ? undefined : "Turn on Fetch on launch in Settings to use this preference."}
+                                disabled={pendingPins.value.includes(
+                                  currentRepo.id,
+                                )}
+                                onClick={() => togglePin(currentRepo)}
                               >
-                                <Switch
-                                  id="repository-fetch-on-launch"
-                                  checked={repoFetchEnabled(
-                                    { ...currentRepo, fetch_mode: workflowFor(currentRepo)?.fetch_mode },
-                                    launchPreferences.value.scope,
-                                  )}
-                                  disabled={!repoMetadataReady.value || savingRepoFetch.value.has(currentRepo.id)}
-                                  onCheckedChange={(enabled) => void toggleRepoFetch(currentRepo, enabled)}
+                                <Pin
+                                  size={16}
+                                  fill={
+                                    currentRepo.pinned ? "currentColor" : "none"
+                                  }
                                 />
-                                <FieldLabel htmlFor="repository-fetch-on-launch">Fetch on launch</FieldLabel>
-                              </ShadcnField>
-                            )}
+                              </ShadcnButton>
+                              <ShadcnButton
+                                data-tour="organize"
+                                variant="outline"
+                                disabled={working.value}
+                                onClick={() => openOrganization(currentRepo)}
+                              >
+                                <Tags size={15} />
+                                {" Organize"}
+                              </ShadcnButton>
+                              {launchPreferences.value && (
+                                <ShadcnField
+                                  orientation="horizontal"
+                                  className="repo-fetch-switch"
+                                  title={launchPreferences.value.enabled ? undefined : "Turn on Fetch on launch in Settings to use this preference."}
+                                >
+                                  <Switch
+                                    id="repository-fetch-on-launch"
+                                    checked={repoFetchEnabled(
+                                      { ...currentRepo, fetch_mode: workflowFor(currentRepo)?.fetch_mode },
+                                      launchPreferences.value.scope,
+                                    )}
+                                    disabled={!repoMetadataReady.value || savingRepoFetch.value.has(currentRepo.id)}
+                                    onCheckedChange={(enabled) => void toggleRepoFetch(currentRepo, enabled)}
+                                  />
+                                  <FieldLabel htmlFor="repository-fetch-on-launch">Fetch on launch</FieldLabel>
+                                </ShadcnField>
+                              )}
+                            </div>
                             <ShadcnButton
                               aria-label={
                                 "Switch branch. Current branch: " +
@@ -2354,7 +2355,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                     ))}
                                     <Popover>
                                       <PopoverTrigger asChild>
-                                        <ShadcnButton variant="ghost">More actions</ShadcnButton>
+                                        <ShadcnButton variant="outline">More actions</ShadcnButton>
                                       </PopoverTrigger>
                                       <PopoverContent align="end" className="changes-actions" aria-label="More repository actions">
                                         {menuActions.map(({ label, disabled, select }) => (
@@ -3786,7 +3787,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                     <section aria-label="Collections" className="overview-collections">
                                       {collectionShelf.value.map(([name, count]) => (
                                         <CollectionContextMenu key={name} {...collectionActions(name)}>
-                                        <Card className="overview-collection-card">
+                                        <Card className="overview-collection-card" data-collection-item={name}>
                                           <CollectionActions {...collectionActions(name)} />
                                           <DraggableCollectionButton
                                             className="overview-collection-open"

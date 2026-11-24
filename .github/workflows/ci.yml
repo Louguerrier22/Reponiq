@@ -5,6 +5,11 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      package_only:
+        description: Package without test suites when explicitly requested for a release
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -24,7 +29,8 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - run: npm test
+      - if: ${{ !inputs.package_only }}
+        run: npm test
       - run: npm run build
       - run: node scripts/release.mjs verify
   native:
@@ -64,11 +70,13 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev pkg-config patchelf libfuse2 xvfb x11-utils dbus-x11
       - run: npm ci
       - run: node scripts/release.mjs verify
-      - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - if: ${{ !inputs.package_only }}
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - if: ${{ !inputs.package_only }}
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - run: npm run tauri build -- --bundles ${{ matrix.bundles }}
       - name: Linux native startup smoke test
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && !inputs.package_only
         run: |
           XDG_DATA_HOME="$RUNNER_TEMP/reponiq-smoke" NO_AT_BRIDGE=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 timeout 55s xvfb-run -a dbus-run-session -- bash scripts/smoke-linux.sh
       - name: Collect exact installer formats and checksums

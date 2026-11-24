@@ -338,3 +338,30 @@
 .diff-header-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 
 [data-collection-drag-target] { touch-action: pan-y; user-select: none; }
+
+[data-collection-item] {
+  order: var(--collection-drag-order, 0);
+}
+[data-collection-drag-target] {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+[data-collection-gap] {
+  outline: 1px dashed var(--primary);
+  outline-offset: -1px;
+  border-radius: var(--radius);
+}
+[data-collection-gap] > * {
+  opacity: 0;
+}
+.collection-drag-ghost {
+  position: fixed !important;
+  z-index: 100;
+  inset: 0 auto auto 0;
+  margin: 0;
+  pointer-events: none;
+  border-radius: var(--radius);
+  background: var(--popover);
+  box-shadow: 0 8px 20px rgb(0 0 0 / 28%);
+}

@@ -256,10 +256,17 @@ fn launch_program(command: &mut Command) -> std::io::Result<()> {
 
 fn terminal(path: &Path) -> Result<(), String> {
     #[cfg(windows)]
-    let choices = ["System32/cmd.exe"];
+    let directory = windows_terminal_directory(path);
+    #[cfg(windows)]
+    let choices = if directory.as_os_str().to_string_lossy().starts_with(r"\\") {
+        ["System32/WindowsPowerShell/v1.0/powershell.exe"]
+    } else {
+        ["System32/cmd.exe"]
+    };
     #[cfg(target_os = "linux")]
     let choices = [
         "xdg-terminal-exec",
+        "x-terminal-emulator",
         "gnome-terminal",
         "konsole",
         "xfce4-terminal",
@@ -283,7 +290,18 @@ fn terminal(path: &Path) -> Result<(), String> {
             let mut command = Command::new(executable);
             command.current_dir(path);
             #[cfg(windows)]
-            command.arg("/D");
+            {
+                use std::os::windows::process::CommandExt;
+                use windows_sys::Win32::System::Threading::CREATE_NEW_CONSOLE;
+                command
+                    .creation_flags(CREATE_NEW_CONSOLE)
+                    .current_dir(&directory)
+                    .arg(if name.ends_with("cmd.exe") {
+                        "/D"
+                    } else {
+                        "-NoLogo"
+                    });
+            }
             #[cfg(target_os = "linux")]
             match name {
                 "gnome-terminal" | "xfce4-terminal" => {
@@ -300,6 +318,37 @@ fn terminal(path: &Path) -> Result<(), String> {
         }
     }
     Err("Could not open a supported terminal. You can open the repository folder instead.".into())
+}
+
+#[cfg(windows)]
+fn windows_terminal_directory(path: &Path) -> PathBuf {
+    use std::os::windows::ffi::OsStringExt;
+    use std::path::{Component, Prefix};
+
+    let mut components = path.components();
+    if let Some(Component::Prefix(prefix)) = components.next() {
+        match prefix.kind() {
+            Prefix::VerbatimDisk(drive) => {
+                let mut folder = PathBuf::from(std::ffi::OsString::from_wide(&[
+                    u16::from(drive),
+                    u16::from(b':'),
+                ]));
+                folder.push(components.as_path());
+                return folder;
+            }
+            Prefix::VerbatimUNC(server, share) => {
+                let mut network = std::ffi::OsString::from(r"\\");
+                network.push(server);
+                network.push(r"\");
+                network.push(share);
+                let mut folder = PathBuf::from(network);
+                folder.push(components.as_path());
+                return folder;
+            }
+            _ => {}
+        }
+    }
+    path.to_path_buf()
 }
 
 fn worktree_file(root: &Path, relative: &str) -> Result<PathBuf, String> {
@@ -331,7 +380,7 @@ pub async fn open_repo_location(
         let (path,editor)={
             let db=s.database.lock().map_err(err)?;
             let path=target.verified_path(&db)?;
-            let editor=if matches!(action.as_str(), "editor" | "fileEditor") {
+            let editor=if action == "editor" {
                 use rusqlite::OptionalExtension;
                 let chosen=db.query_row("SELECT editor FROM repo_workflow WHERE repo_id=?1", [target.id], |row|row.get::<_,Option<String>>(0)).optional().map_err(err)?.flatten();
                 chosen.or(workflow::app_preferences(&db)?.editor)
@@ -356,12 +405,6 @@ pub async fn open_repo_location(
             "fileDefault" | "fileEditor" | "fileFolder" => {
                 let file = worktree_file(&path, reference.as_deref().ok_or("Choose a file first.")?)?;
                 match action.as_str() {
-                    "fileEditor" => {
-                        let executable = workflow::editor_path(editor)?.ok_or("Choose an editor in Settings.")?;
-                        launch_program(Command::new(executable).arg(&file).current_dir(&path))
-                            .map_err(|_| "Could not launch the selected editor.")?;
-                        Ok(())
-                    }
                     "fileFolder" => app.opener().reveal_item_in_dir(&file).or_else(|_| {
                         let folder = file.parent().unwrap_or(&path);
                         app.opener().open_path(folder.to_string_lossy().into_owned(), None::<String>)

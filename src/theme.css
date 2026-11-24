@@ -111,6 +111,7 @@
 [data-slot="field"].repo-fetch-switch {
   width: auto;
   min-height: var(--control-height);
+  align-items: center;
   gap: 8px;
   padding-inline: 6px;
   white-space: nowrap;
@@ -155,13 +156,14 @@
 .workbench-header .workbench-heading { margin: 0; min-width: 0; }
 .workbench-header .workbench-heading > div:first-child { min-width: 0; }
 .workbench-header .heading-row h1 { overflow-wrap: anywhere; }
-.repo-command-bar, .repo-sync-buttons {
+.repo-command-bar, .repo-organization-buttons, .repo-sync-buttons {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   flex-wrap: wrap;
   gap: var(--control-gap);
   min-width: 0;
 }
+.repo-command-bar { column-gap: calc(2 * var(--control-gap)); }
 @media (min-width: 1000px) {
   .workbench-main .changes-workbench { grid-template-columns: minmax(210px, 25%) minmax(0, 1fr); }
 }
