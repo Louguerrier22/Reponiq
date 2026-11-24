@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.4
+
+- Rename, change the root folder, or remove a repository from More actions.
+- Removing a repository keeps its files by default. If you choose to delete the folder, Reponiq removes the registration only after deletion succeeds.
+
 ## 1.2.3
 
 - Compact windows switch directly to a retractable sidebar with full navigation.

@@ -6,11 +6,12 @@ state,
 useController,
 type Lifecycle
 } from "../controller";
-import { Button,Checkbox,Label } from "../ui";
+import { Button,Checkbox,Input,Label } from "../ui";
 import { cn } from "../utils";
 import Modal from "./Modal";
 type Props = {
   repo: Repo;
+  changeRoot?: boolean;
   mainWorktree?: string | null;
   onclose: () => void;
   onlocated: () => Promise<void>;
@@ -22,19 +23,24 @@ function createView(lifecycle: Lifecycle<Props>) {
   const onclose = derived(() => lifecycle.props().onclose);
   const onlocated = derived(() => lifecycle.props().onlocated);
   const onadded = derived(() => lifecycle.props().onadded);
+  const changeRoot = derived(() => lifecycle.props().changeRoot);
+  const folder = state(readablePath(repo.value.path));
   let preview = state<Location | null>(null),
     busy = state(false),
     acknowledged = state(false),
     error = state("");
-  async function inspect(main = false) {
+  async function inspect(source: "browse" | "typed" | "main") {
     if (busy.value) return;
     busy.value = true;
     error.value = "";
     acknowledged.value = false;
     try {
-      const path = main ? null : await api.pickRepoFolder();
-      if (main || path)
+      const path = source === "main" ? null
+        : source === "browse" ? await api.pickRepoFolder() : folder.value.trim();
+      if (source === "main" || path) {
+        if (path) folder.value = readablePath(path);
         preview.value = await api.inspectLocation(repo.value, path);
+      }
     } catch (reason) {
       preview.value = null;
       error.value = String(reason);
@@ -66,29 +72,45 @@ function createView(lifecycle: Lifecycle<Props>) {
   return () => (
     <>
       <Modal
-        label={"Locate repository folder"}
+        label={changeRoot.value ? "Change root folder" : "Locate repository folder"}
         canClose={!busy.value}
         onclose={onclose.value}
       >
-        <h2>
-          {"Locate "}
-          {repo.value.name}
-        </h2>
-        <p>{readablePath(repo.value.path)}</p>
+        <h2>{changeRoot.value ? "Change root folder" : `Locate ${repo.value.name}`}</h2>
+        {changeRoot.value ? (
+          <>
+            <Label htmlFor="repository-root-folder">Repository folder</Label>
+            <div className="folder-picker">
+              <Input
+                id="repository-root-folder"
+                value={folder.value}
+                disabled={busy.value}
+                onValueChange={(next) => {
+                  folder.value = next;
+                  preview.value = null;
+                  error.value = "";
+                }}
+              />
+              <Button variant="secondary" disabled={busy.value} onClick={() => inspect("browse")}>
+                Browse…
+              </Button>
+            </div>
+          </>
+        ) : <p>{readablePath(repo.value.path)}</p>}
         <div className={cn("toolbar")}>
           <Button
-            variant={"secondary"}
-            disabled={busy.value}
-            onClick={() => inspect()}
+            variant="secondary"
+            disabled={busy.value || (changeRoot.value && !folder.value.trim())}
+            onClick={() => inspect(changeRoot.value ? "typed" : "browse")}
           >
-            {"Choose Git folder…"}
+            {changeRoot.value ? "Check folder" : "Choose Git folder…"}
           </Button>
           {mainWorktree.value ? (
             <>
               <Button
                 variant={"secondary"}
                 disabled={busy.value}
-                onClick={() => inspect(true)}
+                onClick={() => inspect("main")}
               >
                 {"Use main worktree"}
               </Button>
@@ -140,7 +162,7 @@ function createView(lifecycle: Lifecycle<Props>) {
               >
                 {preview.value.matching === "mismatch"
                   ? "Add as new"
-                  : "Relink repository"}
+                  : changeRoot.value ? "Change root folder" : "Relink repository"}
               </Button>
             </div>
           </>

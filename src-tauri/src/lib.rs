@@ -860,14 +860,132 @@ fn register_repo(prepared: PreparedRepo, state: &State) -> Result<Repo, String> 
     repo.registration = registration;
     Ok(repo)
 }
-fn remove_repo_impl(id: i64, state: &State) -> Result<(), String> {
-    state
-        .database
-        .lock()
-        .map_err(err)?
-        .execute("DELETE FROM repos WHERE id=?1", [id])
+fn rename_repo_impl(target: workflow::Target, name: String, state: &State) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 120 || name.chars().any(char::is_control) {
+        return Err("Enter a repository name between 1 and 120 characters.".into());
+    }
+    let mut db = state.database.lock().map_err(err)?;
+    let tx = db
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(err)?;
-    Ok(())
+    if !target.is_current_registration(&tx)? {
+        return Err("The repository changed. Reopen it and try again.".into());
+    }
+    tx.execute(
+        "UPDATE repos SET name=?1 WHERE id=?2",
+        params![name, target.id],
+    )
+    .map_err(err)?;
+    tx.commit().map_err(err)
+}
+
+fn delete_repository_folder(db: &Connection, target: &workflow::Target) -> Result<(), String> {
+    use cap_fs_ext::DirExt;
+    use cap_std::fs::Dir;
+
+    let path = target.verified_path(db)?;
+    let parent = path
+        .parent()
+        .ok_or("The repository must be inside a parent folder.")?;
+    let name = path
+        .file_name()
+        .ok_or("The repository folder has no name.")?;
+    if root(&target.path)? != path {
+        return Err("The repository root changed. Review its location before deleting it.".into());
+    }
+
+    let parent_dir = Dir::open_ambient_dir(parent, cap_std::ambient_authority()).map_err(err)?;
+    let folder = parent_dir.open_dir_nofollow(name).map_err(err)?;
+    folder
+        .open_dir_nofollow(".git")
+        .map_err(|_| "Only a standalone repository folder can be deleted here.")?;
+    if git(&path, &["worktree", "list", "--porcelain", "-z"])?
+        .split('\0')
+        .filter(|field| field.starts_with("worktree "))
+        .count()
+        != 1
+    {
+        return Err("Remove linked worktrees before deleting this repository folder.".into());
+    }
+
+    let inside_folder = |other: &Path| {
+        #[cfg(windows)]
+        return PathBuf::from(other.to_string_lossy().to_lowercase())
+            .starts_with(PathBuf::from(path.to_string_lossy().to_lowercase()));
+        #[cfg(not(windows))]
+        other.starts_with(&path)
+    };
+    if let Some(database_path) = db.path() {
+        let database_path = std::fs::canonicalize(database_path).map_err(err)?;
+        if inside_folder(&database_path) {
+            return Err("This folder contains Reponiq's workspace data.".into());
+        }
+    }
+
+    let mut paths = db
+        .prepare("SELECT path FROM repos WHERE id<>?1")
+        .map_err(err)?;
+    let registered = paths
+        .query_map([target.id], |row| row.get::<_, String>(0))
+        .map_err(err)?;
+    for registered_path in registered {
+        if inside_folder(Path::new(&registered_path.map_err(err)?)) {
+            return Err("This folder contains another registered repository.".into());
+        }
+    }
+
+    if root(&target.path)? != path {
+        return Err("The repository root changed. Review its location before deleting it.".into());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use cap_std::fs::MetadataExt;
+        let metadata = folder.dir_metadata().map_err(err)?;
+        repository_identity::record_identity(
+            db,
+            target.id,
+            &(
+                target.path.clone(),
+                metadata.dev().to_string(),
+                metadata.ino().to_string(),
+            ),
+            false,
+        )?;
+        target.verified_path(db)?;
+    }
+    folder.remove_open_dir_all().map_err(|error| {
+        format!(
+            "The folder could not be fully deleted. The repository is still registered. {error}"
+        )
+    })?;
+    match std::fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        _ => Err(
+            "The folder could not be confirmed deleted. The repository is still registered.".into(),
+        ),
+    }
+}
+
+fn remove_repo_impl(
+    target: workflow::Target,
+    delete_folder: bool,
+    state: &State,
+) -> Result<(), String> {
+    let _mutation = gitflow::MUTATIONS.lock().map_err(err)?;
+    let mut db = state.database.lock().map_err(err)?;
+    let tx = db
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(err)?;
+    if !target.is_current_registration(&tx)? {
+        return Err("The repository changed. Reopen it and try again.".into());
+    }
+    if delete_folder {
+        delete_repository_folder(&tx, &target)?;
+    }
+    tx.execute("DELETE FROM repos WHERE id=?1", [target.id])
+        .map_err(err)?;
+    tx.commit().map_err(err)
 }
 fn pin_repo_impl(id: i64, pinned: bool, state: &State) -> Result<(), String> {
     workflow::pin(&mut *state.database.lock().map_err(err)?, id, pinned)
@@ -1640,6 +1758,7 @@ pub fn run() {
             repo_summary,
             add_repo,
             remove_repo,
+            rename_repo,
             pin_repo,
             organize_repo,
             assign_collection,
@@ -1731,6 +1850,78 @@ mod release_tests {
         assert!(result.status.success());
         dir
     }
+    #[test]
+    fn repository_management_preserves_registration_until_folder_removal_succeeds() {
+        let repo = fixture();
+        let path = root(repo.path().to_str().unwrap()).unwrap();
+        let database_dir = tempfile::tempdir().unwrap();
+        let db = initialize(&database_dir.path().join("management.sqlite")).unwrap();
+        db.execute(
+            "INSERT INTO repos(id,path,name,pinned,collection) VALUES(1,?1,'Old name',1,'Projects')",
+            [path.to_str().unwrap()],
+        )
+        .unwrap();
+        let target = workflow::Target {
+            id: 1,
+            path: path.to_str().unwrap().into(),
+            registration: workflow::registration(&db, 1).unwrap(),
+        };
+        let state = State {
+            database: std::sync::Arc::new(std::sync::Mutex::new(db)),
+            credential_service: "fixture",
+        };
+
+        rename_repo_impl(target.clone(), " New name ".into(), &state).unwrap();
+        {
+            let db = state.database.lock().unwrap();
+            let row = db
+                .query_row(
+                    "SELECT name,pinned,collection FROM repos WHERE id=1",
+                    [],
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, bool>(1)?,
+                            r.get::<_, String>(2)?,
+                        ))
+                    },
+                )
+                .unwrap();
+            assert_eq!(row, ("New name".into(), true, "Projects".into()));
+            assert!(target.is_current_registration(&db).unwrap());
+            db.execute(
+                "INSERT INTO repos(id,path,name) VALUES(2,?1,'Nested')",
+                [path.join("nested").to_str().unwrap()],
+            )
+            .unwrap();
+        }
+
+        std::fs::write(path.join("untracked.txt"), "Keep until confirmed").unwrap();
+        assert!(remove_repo_impl(target.clone(), true, &state)
+            .unwrap_err()
+            .contains("another registered repository"));
+        assert!(path.join("untracked.txt").is_file());
+        let nested = workflow::Target {
+            id: 2,
+            path: path.join("nested").to_str().unwrap().into(),
+            registration: workflow::registration(&state.database.lock().unwrap(), 2).unwrap(),
+        };
+        assert!(remove_repo_impl(nested.clone(), true, &state).is_err());
+        assert!(nested
+            .is_current_registration(&state.database.lock().unwrap())
+            .unwrap());
+        remove_repo_impl(nested, false, &state).unwrap();
+        assert!(target
+            .is_current_registration(&state.database.lock().unwrap())
+            .unwrap());
+
+        remove_repo_impl(target.clone(), true, &state).unwrap();
+        assert!(!path.exists());
+        assert!(!target
+            .is_current_registration(&state.database.lock().unwrap())
+            .unwrap());
+    }
+
     #[test]
     fn assigning_a_collection_is_atomic_and_preserves_existing_tags() {
         let dir = tempfile::tempdir().unwrap();
@@ -2156,8 +2347,23 @@ async fn add_repo(path: String, state: tauri::State<'_, State>) -> Result<Repo, 
     background(state, move |state| register_repo(prepared, state)).await
 }
 #[tauri::command]
-async fn remove_repo(id: i64, state: tauri::State<'_, State>) -> Result<(), String> {
-    background(state, move |state| remove_repo_impl(id, state)).await
+async fn remove_repo(
+    target: workflow::Target,
+    delete_folder: bool,
+    state: tauri::State<'_, State>,
+) -> Result<(), String> {
+    background(state, move |state| {
+        remove_repo_impl(target, delete_folder, state)
+    })
+    .await
+}
+#[tauri::command]
+async fn rename_repo(
+    target: workflow::Target,
+    name: String,
+    state: tauri::State<'_, State>,
+) -> Result<(), String> {
+    background(state, move |state| rename_repo_impl(target, name, state)).await
 }
 #[tauri::command]
 async fn pin_repo(id: i64, pinned: bool, state: tauri::State<'_, State>) -> Result<(), String> {
