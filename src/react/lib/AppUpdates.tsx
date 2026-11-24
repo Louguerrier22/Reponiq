@@ -192,8 +192,10 @@ function createView(lifecycle: Lifecycle<Props>) {
         }
       })
       .catch(() => undefined);
+    const traySubscription = listen("open-app-updates", () => void showUpdates()).catch(() => undefined);
     void check();
     return () => {
+      void traySubscription.then((unlisten) => unlisten?.());
       if (quitRequest !== undefined) resumeAfterQuit(quitRequest);
       void subscription.then((unlisten) => unlisten?.());
       void quitTimeout.then((unlisten) => unlisten?.());

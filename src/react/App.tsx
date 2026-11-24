@@ -80,7 +80,8 @@ import {
 } from "./controller";
 import { Github } from "./icons";
 import ActivityHistory, { activityTitle } from "./lib/ActivityHistory";
-import { CollectionActions, collectionDragStart, collectionDropTarget } from "./lib/CollectionActions";
+import { ActionsContextMenu } from "./lib/ActionsContextMenu";
+import { CollectionActions, CollectionContextMenu, collectionDragStart, collectionDropTarget } from "./lib/CollectionActions";
 import CollectionMenuItem from "./lib/CollectionMenuItem";
 import AccountsSettings from "./lib/AccountsSettings";
 import AppUpdates, { AppUpdateButton } from "./lib/AppUpdates";
@@ -806,8 +807,8 @@ function createView(lifecycle: Lifecycle<Props>) {
       error.value = String(reason);
     }
   }
-  function openMenu(repo: Repo, file?: string) {
-    const actions = file ? [
+  function locationActions(repo: Repo, file?: string) {
+    return (file ? [
       { label: "Open with default app", action: "fileDefault" },
       { label: "Open in editor", action: "fileEditor" },
       { label: "Show in file manager", action: "fileFolder" },
@@ -815,7 +816,12 @@ function createView(lifecycle: Lifecycle<Props>) {
       { label: "Open repository folder", action: "folder" },
       { label: "Open in editor", action: "editor" },
       { label: "Open in terminal", action: "terminal" },
-    ] as const;
+    ] as const).map(({ label, action }) => ({
+      label,
+      select: () => void openLocation(repo, action, file),
+    }));
+  }
+  function openMenu(repo: Repo, file?: string) {
     return (
       <Popover>
         <PopoverTrigger asChild>
@@ -824,9 +830,9 @@ function createView(lifecycle: Lifecycle<Props>) {
           </ShadcnButton>
         </PopoverTrigger>
         <PopoverContent align="end" className="changes-actions">
-          {actions.map(({ label, action }) => (
-            <PopoverClose key={action} asChild>
-              <ShadcnButton variant="ghost" onClick={() => void openLocation(repo, action, file)}>
+          {locationActions(repo, file).map(({ label, select }) => (
+            <PopoverClose key={label} asChild>
+              <ShadcnButton variant="ghost" onClick={select}>
                 {label}
               </ShadcnButton>
             </PopoverClose>
@@ -1675,6 +1681,24 @@ function createView(lifecycle: Lifecycle<Props>) {
     );
     if (["pull", "merge_upstream"].includes(task.action)) void loadMetadata();
   }
+  function openRenameRepo(repo: Repo) {
+    repoDialogError.value = "";
+    renaming.value = { repo, name: repo.name };
+  }
+
+  function openChangeRoot(repo: Repo) {
+    changingRoot.value = true;
+    locating.value = repo;
+  }
+
+  function repositoryActions(repo: Repo) {
+    return [
+      { label: "Rename", select: !working.value ? () => openRenameRepo(repo) : undefined },
+      { label: "Change root folder", select: !working.value ? () => openChangeRoot(repo) : undefined },
+      { label: "Remove", select: !working.value ? () => openRemoveRepo(repo) : undefined },
+    ];
+  }
+
   function openRemoveRepo(repo: Repo) {
     repoDialogError.value = "";
     removing.value = { repo, deleteFolder: false };
@@ -2312,19 +2336,12 @@ function createView(lifecycle: Lifecycle<Props>) {
                                     select: () => runGit("fetch"),
                                   }] : []),
                                 ];
-                                const repositoryActions = [
-                                  { label: "Rename", disabled: working.value, select: () => {
-                                    repoDialogError.value = "";
-                                    renaming.value = { repo: currentRepo, name: currentRepo.name };
-                                  } },
-                                  { label: "Change root folder", disabled: working.value, select: () => {
-                                    changingRoot.value = true;
-                                    locating.value = currentRepo;
-                                  } },
-                                  { label: "Remove", disabled: working.value, select: () => openRemoveRepo(currentRepo) },
-                                ];
+                                const management = repositoryActions(currentRepo).map((action) => ({
+                                  ...action,
+                                  disabled: !action.select,
+                                }));
                                 const changesTab = activeTab.value === "changes";
-                                const menuActions = changesTab ? [...actions, ...repositoryActions] : repositoryActions;
+                                const menuActions = changesTab ? [...actions, ...management] : management;
                                 return (
                                   <>
                                     {!changesTab && actions.map(({ label, disabled, select }) => (
@@ -2774,6 +2791,10 @@ function createView(lifecycle: Lifecycle<Props>) {
                                                                   )
                                                                 }
                                                               />
+                                                              <ActionsContextMenu actions={[
+                                                                { label: "View changes", select: () => void showDiff(file.path, currentRepo.id) },
+                                                                ...(file.x !== "D" && file.y !== "D" ? locationActions(currentRepo, file.path) : []),
+                                                              ]}>
                                                               <Button
                                                                 aria-pressed={
                                                                   selectedFile.value ===
@@ -2830,6 +2851,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                                                   )}
                                                                 </b>
                                                               </Button>
+                                                              </ActionsContextMenu>
                                                               {conflicted ? (
                                                                 <>
                                                                   <Button
@@ -3761,7 +3783,8 @@ function createView(lifecycle: Lifecycle<Props>) {
                                   {showCollectionShelf.value ? (
                                     <section aria-label="Collections" className="overview-collections">
                                       {collectionShelf.value.map(([name, count]) => (
-                                        <Card key={name} className="overview-collection-card" {...collectionDropTarget(name, moveCollection, true)}>
+                                        <CollectionContextMenu key={name} {...collectionActions(name)}>
+                                        <Card className="overview-collection-card" {...collectionDropTarget(name, moveCollection, true)}>
                                           <CollectionActions {...collectionActions(name)} />
                                           <Button
                                             className="overview-collection-open"
@@ -3779,6 +3802,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                             </span>
                                           </Button>
                                         </Card>
+                                        </CollectionContextMenu>
                                       ))}
                                       {!collectionShelf.value.length && <p className="empty-small">No collections match your search.</p>}
                                     </section>
@@ -3840,7 +3864,11 @@ function createView(lifecycle: Lifecycle<Props>) {
                                         </>
                                       ) : (
                                         entries.map((r, index) => (
-                                          <Fragment key={r.id}>
+                                          <ActionsContextMenu key={r.id} actions={[
+                                            { label: "Open repository", select: () => void selectRepo(r.id) },
+                                            ...locationActions(r),
+                                            ...repositoryActions(r),
+                                          ]}>
                                             <Card
                                               as={"article"}
                                               className={cn("repository-card")}
@@ -4305,7 +4333,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                                 );
                                               })()}
                                             </Card>
-                                          </Fragment>
+                                          </ActionsContextMenu>
                                         ))
                                       );
                                     })()}

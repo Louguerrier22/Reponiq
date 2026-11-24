@@ -7,8 +7,8 @@ use std::{
 };
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::{TrayIconBuilder, TrayIconEvent},
-    Manager,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Emitter, Manager,
 };
 mod branches;
 mod catalog;
@@ -1633,6 +1633,14 @@ async fn sync_account(id: i64, state: tauri::State<'_, State>) -> Result<String,
     ))
 }
 
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let fontconfig = startup::configure_font_cache();
@@ -1669,32 +1677,43 @@ pub fn run() {
                 credential_service: storage.credential_service,
             });
             let show = MenuItem::with_id(app, "show", "Show Reponiq", true, None::<&str>)?;
+            let updates = MenuItem::with_id(app, "updates", "App updates…", true, None::<&str>)?;
+            let hide = MenuItem::with_id(app, "hide", "Hide Reponiq", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Reponiq", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let menu = Menu::with_items(app, &[&show, &updates, &hide, &quit])?;
             let icon = app
                 .default_window_icon()
                 .cloned()
                 .ok_or_else(|| std::io::Error::other("Missing app icon"))?;
             TrayIconBuilder::new()
                 .icon(icon)
+                .tooltip("Reponiq")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => updater::request_quit(app),
-                    "show" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
+                    "show" => show_main_window(app),
+                    "updates" => {
+                        show_main_window(app);
+                        let _ = app.emit_to("main", "open-app-updates", ());
+                    }
+                    "hide" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.hide();
                         }
                     }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::DoubleClick { .. } = event {
-                        if let Some(w) = tray.app_handle().get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
+                    if matches!(
+                        event,
+                        TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
                         }
+                    ) {
+                        show_main_window(tray.app_handle());
                     }
                 })
                 .build(app)?;
