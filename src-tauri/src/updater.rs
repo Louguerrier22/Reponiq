@@ -1,4 +1,5 @@
-use serde::Serialize;
+use rusqlite::OptionalExtension;
+use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::utils::{config::BundleType, platform::bundle_type};
@@ -6,7 +7,180 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use url::Url;
 
-const FEED: &str = "https://github.com/Louguerrier22/Reponiq/releases/latest/download/latest.json";
+const CATALOG: &str = "https://api.github.com/repos/Louguerrier22/Reponiq/releases?per_page=50";
+const PREFERENCE: &str = "app-update-selection";
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub(super) struct Selection {
+    beta: bool,
+    version: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ReleaseEntry {
+    tag_name: String,
+    draft: bool,
+    assets: Vec<ReleaseAsset>,
+}
+
+#[derive(Deserialize)]
+struct ReleaseAsset {
+    name: String,
+}
+
+fn version_tuple(version: &str) -> Option<[u32; 3]> {
+    let mut result = [0; 3];
+    let mut components = version.split('.');
+    for value in &mut result {
+        let part = components.next()?;
+        if part.is_empty()
+            || !part.bytes().all(|b| b.is_ascii_digit())
+            || (part.len() > 1 && part.starts_with('0'))
+        {
+            return None;
+        }
+        *value = part.parse().ok()?;
+    }
+    components.next().is_none().then_some(result)
+}
+
+fn matches_channel(version: [u32; 3], beta: bool) -> bool {
+    (version[2] != 0) == beta
+}
+
+async fn available_versions(
+    app: &AppHandle,
+    suffix: &str,
+    beta: bool,
+) -> Result<Vec<String>, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("Reponiq updater")
+        .timeout(Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(super::err)?;
+    let mut releases = Vec::new();
+    let mut remaining_bytes = 16 * 1024 * 1024;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    for page in 1..=10 {
+        let (entries, has_next) = tokio::time::timeout_at(deadline, async {
+            let mut response = client
+                .get(CATALOG)
+                .query(&[("page", page)])
+                .send()
+                .await
+                .map_err(|_| FAILURE.to_string())?
+                .error_for_status()
+                .map_err(|_| FAILURE.to_string())?;
+            let has_next = response
+                .headers()
+                .get_all(reqwest::header::LINK)
+                .iter()
+                .filter_map(|value| value.to_str().ok())
+                .flat_map(|value| value.split(','))
+                .any(|link| {
+                    link.split(';')
+                        .skip(1)
+                        .any(|parameter| parameter.trim() == "rel=\"next\"")
+                });
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response.chunk().await.map_err(|_| FAILURE.to_string())? {
+                if chunk.len() > remaining_bytes {
+                    return Err(FAILURE.into());
+                }
+                remaining_bytes -= chunk.len();
+                bytes.extend_from_slice(&chunk);
+            }
+            let entries: Vec<ReleaseEntry> = serde_json::from_slice(&bytes).map_err(super::err)?;
+            Ok::<_, String>((entries, has_next))
+        })
+        .await
+        .map_err(|_| FAILURE.to_string())??;
+        releases.extend(entries);
+        if !has_next {
+            break;
+        }
+        if page == 10 {
+            return Err("The release catalog exceeded the update check limit.".into());
+        }
+    }
+    let current = version_tuple(&app.package_info().version.to_string()).ok_or(FAILURE)?;
+    let mut versions: Vec<_> = releases
+        .into_iter()
+        .filter_map(|release| {
+            let label = release.tag_name.strip_prefix('v')?;
+            let version = version_tuple(label)?;
+            let package = format!("Reponiq-{label}-{suffix}");
+            let has_asset = |name: &str| release.assets.iter().any(|asset| asset.name == name);
+            (!release.draft
+                && version > current
+                && matches_channel(version, beta)
+                && has_asset("latest.json")
+                && has_asset(&package)
+                && has_asset(&format!("{package}.sig")))
+            .then(|| (version, label.to_owned()))
+        })
+        .collect();
+    versions.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    versions.dedup_by(|a, b| a.0 == b.0);
+    Ok(versions.into_iter().map(|(_, label)| label).collect())
+}
+
+fn read_selection(app: &AppHandle) -> Result<Selection, String> {
+    let state = app.state::<super::State>();
+    let db = state.database.lock().map_err(super::err)?;
+    let saved: Option<String> = db
+        .query_row(
+            "SELECT value FROM preferences WHERE key=?1",
+            [PREFERENCE],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(super::err)?;
+    saved.map_or_else(
+        || Ok(Selection::default()),
+        |value| serde_json::from_str(&value).map_err(super::err),
+    )
+}
+
+#[tauri::command]
+pub(super) fn app_update_selection(app: AppHandle) -> Result<Selection, String> {
+    read_selection(&app)
+}
+
+#[tauri::command]
+pub(super) async fn app_update_versions(app: AppHandle, beta: bool) -> Result<Vec<String>, String> {
+    match package() {
+        Some((_, suffix, _)) => available_versions(&app, suffix, beta).await,
+        None => Ok(vec![]),
+    }
+}
+
+#[tauri::command]
+pub(super) fn set_app_update_selection(app: AppHandle, selection: Selection) -> Result<(), String> {
+    if let Some(version) = selection.version.as_deref() {
+        let selected = version_tuple(version).ok_or("Invalid version.")?;
+        let current = version_tuple(&app.package_info().version.to_string()).ok_or(FAILURE)?;
+        if !matches_channel(selected, selection.beta) || selected <= current {
+            return Err("Choose a newer version from the selected channel.".into());
+        }
+    }
+    let updates = app.state::<Updates>();
+    let mut pending = updates.0.lock().map_err(super::err)?;
+    if pending.checking || pending.installing {
+        return Err("Wait for the current update operation to finish.".into());
+    }
+    let state = app.state::<super::State>();
+    let db = state.database.lock().map_err(super::err)?;
+    let value = serde_json::to_string(&selection).map_err(super::err)?;
+    db.execute("INSERT INTO preferences(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [PREFERENCE, &value])
+        .map_err(super::err)?;
+    pending.staged = None;
+    pending.install_failed = false;
+    Ok(())
+}
+
 const RELEASES: &str = "/Louguerrier22/Reponiq/releases/";
 const FAILURE: &str = "The update could not be prepared. Try again in App updates.";
 
@@ -173,9 +347,20 @@ async fn prepare(
         .timeout(Duration::from_secs(180))
         .build()
         .map_err(|_| FAILURE.to_string())?;
+    let selection = read_selection(app)?;
+    let versions = available_versions(app, suffix, selection.beta).await?;
+    let requested = match selection.version {
+        Some(version) if versions.contains(&version) => version,
+        Some(_) => return Ok(None),
+        None => match versions.into_iter().next() {
+            Some(version) => version,
+            None => return Ok(None),
+        },
+    };
+    let manifest_url = format!("https://github.com{RELEASES}download/v{requested}/latest.json");
     let Some(manifest) = fetch(
         &client,
-        FEED.parse().expect("fixed release URL"),
+        manifest_url.parse().map_err(super::err)?,
         64 << 10,
         true,
     )
@@ -196,7 +381,7 @@ async fn prepare(
     else {
         return Ok(None);
     };
-    if package_url(&update.version, suffix)? != update.download_url {
+    if update.version != requested || package_url(&update.version, suffix)? != update.download_url {
         return Err("The update does not point to its matching Reponiq release package.".into());
     }
     let bytes = fetch(&client, update.download_url.clone(), limit, false)
@@ -377,8 +562,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn patch_versions_belong_to_beta_and_channels_sort_numerically() {
+        assert!(matches_channel(version_tuple("1.3.0").unwrap(), false));
+        assert!(matches_channel(version_tuple("1.2.5").unwrap(), true));
+        assert!(version_tuple("1.2.10") > version_tuple("1.2.5"));
+        for invalid in ["1.2", "1.2.0-beta", "1.2.00", "1.2.0/other"] {
+            assert!(version_tuple(invalid).is_none());
+        }
+    }
+
+    #[test]
     fn update_downloads_only_follow_approved_https_release_locations() {
-        assert!(allow_download_host(&FEED.parse().unwrap()));
+        assert!(allow_download_host(
+            &package_url("1.2.5", "windows-x64.exe").unwrap()
+        ));
         assert!(allow_download_host(
             &"https://release-assets.githubusercontent.com/test"
                 .parse()

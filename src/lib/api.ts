@@ -75,7 +75,7 @@ export const api = {
   saveDraft: (target:Target,scope:DraftScope,input:Draft|null) => invoke<void>('save_workflow_draft',{target,scope,input}),
   repoContext: (target:Target) => invoke<RepoContext>('repo_context',{target}),
   setIdentity: (target:Target,input:{name:string;email:string}|null) => invoke<RepoContext>('set_git_identity',{target,input}),
-  openRepoLocation: (target:Target,action:'editor'|'terminal'|'folder'|'worktree',reference:string|null=null) => invoke<void>('open_repo_location',{target,action,reference}),
+  openRepoLocation: (target:Target,action:'editor'|'terminal'|'folder'|'worktree'|'fileEditor'|'fileDefault'|'fileFolder',reference:string|null=null) => invoke<void>('open_repo_location',{target,action,reference}),
   pickEditor: () => invoke<string|null>('pick_editor'),
   inspectLocation: (target:Target,path:string|null) => invoke<Location>('inspect_repo_location',{target,path}),
   relinkRepo: (target:Target,path:string,confirmUnknown:boolean) => invoke<Location>('relink_repo',{target,path,confirmUnknown}),
@@ -93,6 +93,9 @@ export const api = {
   renameRepo: (target: Target, name: string) => invoke<void>('rename_repo', { target, name }),
   pin: (id: number, pinned: boolean) => invoke<void>('pin_repo', { id, pinned }),
   organize: (id: number, collection: string, tags: string[]) => invoke<void>('organize_repo', { id, collection, tags }),
+  collectionOrder: () => invoke<string[]>('collection_order'),
+  manageCollections: (change: { kind: 'rename'; current: string; name: string } | { kind: 'delete'; current: string } | { kind: 'reorder'; names: string[] }) =>
+    invoke<string[]>('manage_collections', { change }),
   assignCollection: (targets: Target[], collection: string) => invoke<void>('assign_collection', { targets, collection }),
   refresh: () => invoke<Repo[]>('refresh_repos'),
   details: (id: number) => invoke<RepoDetails>('repo_details', { id }),

@@ -285,16 +285,25 @@
   gap: 12px;
 }
 
+.collection-title,
 .overview-collection-card {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.overview-collection-card {
+  flex-direction: row;
   min-width: 0;
-  padding: 0;
+  padding: 0 0 0 6px;
   border: 1px solid var(--border);
   background: var(--background);
   box-shadow: none;
 }
 
-.overview-collection-card button {
-  width: 100%;
+.overview-collection-open {
+  flex: 1;
+  min-width: 0;
   height: auto;
   min-height: 64px;
   justify-content: flex-start;
@@ -302,7 +311,7 @@
   text-align: left;
 }
 
-.overview-collection-card button > span {
+.overview-collection-open > span {
   display: grid;
   min-width: 0;
   gap: 2px;
@@ -325,3 +334,7 @@
   outline: 2px solid var(--ring);
   outline-offset: -2px;
 }
+
+.diff-header-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+[data-collection-drag-target] { touch-action: pan-y; user-select: none; }

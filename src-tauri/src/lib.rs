@@ -7,8 +7,8 @@ use std::{
 };
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::{TrayIconBuilder, TrayIconEvent},
-    Manager,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Emitter, Manager,
 };
 mod branches;
 mod catalog;
@@ -1633,6 +1633,14 @@ async fn sync_account(id: i64, state: tauri::State<'_, State>) -> Result<String,
     ))
 }
 
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let fontconfig = startup::configure_font_cache();
@@ -1669,32 +1677,43 @@ pub fn run() {
                 credential_service: storage.credential_service,
             });
             let show = MenuItem::with_id(app, "show", "Show Reponiq", true, None::<&str>)?;
+            let updates = MenuItem::with_id(app, "updates", "App updates…", true, None::<&str>)?;
+            let hide = MenuItem::with_id(app, "hide", "Hide Reponiq", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Reponiq", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let menu = Menu::with_items(app, &[&show, &updates, &hide, &quit])?;
             let icon = app
                 .default_window_icon()
                 .cloned()
                 .ok_or_else(|| std::io::Error::other("Missing app icon"))?;
             TrayIconBuilder::new()
                 .icon(icon)
+                .tooltip("Reponiq")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => updater::request_quit(app),
-                    "show" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
+                    "show" => show_main_window(app),
+                    "updates" => {
+                        show_main_window(app);
+                        let _ = app.emit_to("main", "open-app-updates", ());
+                    }
+                    "hide" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.hide();
                         }
                     }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::DoubleClick { .. } = event {
-                        if let Some(w) = tray.app_handle().get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
+                    if matches!(
+                        event,
+                        TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
                         }
+                    ) {
+                        show_main_window(tray.app_handle());
                     }
                 })
                 .build(app)?;
@@ -1711,6 +1730,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             updater::check_app_update,
+            updater::app_update_selection,
+            updater::app_update_versions,
+            updater::set_app_update_selection,
             updater::restart_for_update,
             updater::register_app_quit_handler,
             updater::finish_app_quit,
@@ -1762,6 +1784,8 @@ pub fn run() {
             pin_repo,
             organize_repo,
             assign_collection,
+            collection_order,
+            manage_collections,
             refresh_repos,
             repo_details,
             git_action,
@@ -1920,6 +1944,67 @@ mod release_tests {
         assert!(!target
             .is_current_registration(&state.database.lock().unwrap())
             .unwrap());
+    }
+
+    #[test]
+    fn collection_management_keeps_order_and_repository_metadata() {
+        let fixture = tempfile::tempdir().unwrap();
+        let path = fixture.path().join("collections.sqlite");
+        let mut db = initialize(&path).unwrap();
+        db.execute_batch(
+            "INSERT INTO repos(id,path,name,collection,pinned) VALUES
+            (1,'one','One','Alpha',1),(2,'two','Two','Beta',0),(3,'three','Three','Alpha',0);",
+        )
+        .unwrap();
+        assert!(read_collection_order(&db).unwrap().is_empty());
+        apply_collection_change(
+            &mut db,
+            CollectionChange::Reorder {
+                names: vec!["Beta".into(), "Alpha".into()],
+            },
+        )
+        .unwrap();
+        assert!(apply_collection_change(
+            &mut db,
+            CollectionChange::Rename {
+                current: "Alpha".into(),
+                name: "Beta".into(),
+            }
+        )
+        .is_err());
+        apply_collection_change(
+            &mut db,
+            CollectionChange::Rename {
+                current: "Alpha".into(),
+                name: "Projects".into(),
+            },
+        )
+        .unwrap();
+        drop(db);
+        let mut db = initialize(&path).unwrap();
+        assert_eq!(read_collection_order(&db).unwrap(), ["Beta", "Projects"]);
+        apply_collection_change(
+            &mut db,
+            CollectionChange::Delete {
+                current: "Projects".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(read_collection_order(&db).unwrap(), ["Beta"]);
+        let row = db
+            .query_row(
+                "SELECT COUNT(*),SUM(collection IS NULL),SUM(pinned) FROM repos",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(row, (3, 2, 1));
     }
 
     #[test]
@@ -2414,6 +2499,118 @@ async fn assign_collection(
     })
     .await
 }
+const COLLECTION_ORDER_KEY: &str = "workspace-collection-order";
+
+fn read_collection_order(db: &Connection) -> Result<Vec<String>, String> {
+    use rusqlite::OptionalExtension;
+    let saved: Option<String> = db
+        .query_row(
+            "SELECT value FROM preferences WHERE key=?1",
+            [COLLECTION_ORDER_KEY],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(err)?;
+    saved.map_or_else(
+        || Ok(Vec::new()),
+        |value| serde_json::from_str(&value).map_err(err),
+    )
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum CollectionChange {
+    Rename { current: String, name: String },
+    Delete { current: String },
+    Reorder { names: Vec<String> },
+}
+
+fn apply_collection_change(
+    db: &mut Connection,
+    change: CollectionChange,
+) -> Result<Vec<String>, String> {
+    let tx = db
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(err)?;
+    let mut order = read_collection_order(&tx)?;
+    let exists = |name: &str| {
+        tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM repos WHERE collection=?1)",
+            [name],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(err)
+    };
+    match change {
+        CollectionChange::Rename { current, name } => {
+            let name = name.trim();
+            if name.is_empty() || name.len() > 100 || name.chars().any(char::is_control) {
+                return Err("Enter a collection name of up to 100 bytes.".into());
+            }
+            if !exists(&current)? {
+                return Err("The collection no longer exists.".into());
+            }
+            if current != name && exists(name)? {
+                return Err("A collection already has that name.".into());
+            }
+            tx.execute(
+                "UPDATE repos SET collection=?1 WHERE collection=?2",
+                params![name, current],
+            )
+            .map_err(err)?;
+            order
+                .iter_mut()
+                .filter(|entry| **entry == current)
+                .for_each(|entry| *entry = name.to_owned());
+        }
+        CollectionChange::Delete { current } => {
+            let changed = tx
+                .execute(
+                    "UPDATE repos SET collection=NULL WHERE collection=?1",
+                    [&current],
+                )
+                .map_err(err)?;
+            if changed == 0 {
+                return Err("The collection no longer exists.".into());
+            }
+            order.retain(|name| name != &current);
+        }
+        CollectionChange::Reorder { names } => order = names,
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut saved = Vec::new();
+    for name in order {
+        if exists(&name)? && seen.insert(name.clone()) {
+            saved.push(name);
+        }
+    }
+    tx.execute(
+        "INSERT INTO preferences(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![COLLECTION_ORDER_KEY, serde_json::to_string(&saved).map_err(err)?],
+    ).map_err(err)?;
+    tx.commit().map_err(err)?;
+    Ok(saved)
+}
+
+#[tauri::command]
+async fn collection_order(state: tauri::State<'_, State>) -> Result<Vec<String>, String> {
+    background(state, |state| {
+        read_collection_order(&*state.database.lock().map_err(err)?)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn manage_collections(
+    change: CollectionChange,
+    state: tauri::State<'_, State>,
+) -> Result<Vec<String>, String> {
+    background(state, move |state| {
+        apply_collection_change(&mut *state.database.lock().map_err(err)?, change)
+    })
+    .await
+}
+
 #[tauri::command]
 async fn refresh_repos(state: tauri::State<'_, State>) -> Result<Vec<Repo>, String> {
     background(state, move |state| refresh_repos_impl(state)).await

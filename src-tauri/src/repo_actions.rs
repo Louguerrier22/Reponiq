@@ -302,6 +302,23 @@ fn terminal(path: &Path) -> Result<(), String> {
     Err("Could not open a supported terminal. You can open the repository folder instead.".into())
 }
 
+fn worktree_file(root: &Path, relative: &str) -> Result<PathBuf, String> {
+    let relative = Path::new(relative);
+    if relative.as_os_str().is_empty() || !relative.components().all(|part| {
+        matches!(part, std::path::Component::Normal(name) if !name.to_string_lossy().eq_ignore_ascii_case(".git"))
+    }) {
+        return Err("Choose a file in this working tree.".into());
+    }
+    let root = std::fs::canonicalize(root).map_err(err)?;
+    let requested = root.join(relative);
+    let file = std::fs::canonicalize(&requested)
+        .map_err(|_| "This file is no longer in the working tree.")?;
+    if file != requested || !file.is_file() {
+        return Err("Choose a regular file in this working tree.".into());
+    }
+    Ok(file)
+}
+
 #[tauri::command]
 pub async fn open_repo_location(
     target: workflow::Target,
@@ -314,7 +331,7 @@ pub async fn open_repo_location(
         let (path,editor)={
             let db=s.database.lock().map_err(err)?;
             let path=target.verified_path(&db)?;
-            let editor=if action=="editor" {
+            let editor=if matches!(action.as_str(), "editor" | "fileEditor") {
                 use rusqlite::OptionalExtension;
                 let chosen=db.query_row("SELECT editor FROM repo_workflow WHERE repo_id=?1", [target.id], |row|row.get::<_,Option<String>>(0)).optional().map_err(err)?.flatten();
                 chosen.or(workflow::app_preferences(&db)?.editor)
@@ -335,6 +352,23 @@ pub async fn open_repo_location(
                 let executable=workflow::editor_path(editor)?.ok_or("Choose an editor in Settings, or open the repository folder.")?;
                 launch_program(Command::new(executable).arg(&path).current_dir(&path)).map_err(|_|"Could not launch the selected editor. Choose another editor or open the folder.")?;
                 Ok(())
+            }
+            "fileDefault" | "fileEditor" | "fileFolder" => {
+                let file = worktree_file(&path, reference.as_deref().ok_or("Choose a file first.")?)?;
+                match action.as_str() {
+                    "fileEditor" => {
+                        let executable = workflow::editor_path(editor)?.ok_or("Choose an editor in Settings.")?;
+                        launch_program(Command::new(executable).arg(&file).current_dir(&path))
+                            .map_err(|_| "Could not launch the selected editor.")?;
+                        Ok(())
+                    }
+                    "fileFolder" => app.opener().reveal_item_in_dir(&file).or_else(|_| {
+                        let folder = file.parent().unwrap_or(&path);
+                        app.opener().open_path(folder.to_string_lossy().into_owned(), None::<String>)
+                    }).map_err(|_| "Could not show the file in the file manager.".into()),
+                    _ => app.opener().open_path(file.to_string_lossy().into_owned(), None::<String>)
+                        .map_err(|_| "Could not open this file with the default app.".into()),
+                }
             }
             "terminal" => terminal(&path),
             _ => Err("Unknown repository action.".into()),
@@ -704,6 +738,26 @@ mod tests {
         )
         .unwrap();
         (first, git(path, &["rev-parse", "HEAD"]).unwrap())
+    }
+
+    #[test]
+    fn worktree_file_requires_a_regular_file_inside_the_checkout() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join(".git")).unwrap();
+        std::fs::write(directory.path().join(".git/config"), "private").unwrap();
+        std::fs::write(directory.path().join("my file.txt"), "public").unwrap();
+        assert!(worktree_file(directory.path(), "my file.txt").is_ok());
+        for invalid in ["", "../outside.txt", ".git/config", "missing.txt"] {
+            assert!(
+                worktree_file(directory.path(), invalid).is_err(),
+                "{invalid}"
+            );
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("/etc", directory.path().join("alias")).unwrap();
+            assert!(worktree_file(directory.path(), "alias/hosts").is_err());
+        }
     }
 
     #[test]
