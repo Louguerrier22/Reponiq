@@ -81,7 +81,7 @@ import {
 import { Github } from "./icons";
 import ActivityHistory, { activityTitle } from "./lib/ActivityHistory";
 import { ActionsContextMenu } from "./lib/ActionsContextMenu";
-import { CollectionActions, CollectionContextMenu, collectionDragStart, collectionDropTarget } from "./lib/CollectionActions";
+import { CollectionActions, CollectionContextMenu, DraggableCollectionButton } from "./lib/CollectionActions";
 import CollectionMenuItem from "./lib/CollectionMenuItem";
 import AccountsSettings from "./lib/AccountsSettings";
 import AppUpdates, { AppUpdateButton } from "./lib/AppUpdates";
@@ -1863,9 +1863,6 @@ function createView(lifecycle: Lifecycle<Props>) {
     else void runGit(action);
   }
   lifecycle.mount(() => {
-    // The embedded browser should never navigate when a file is dropped.
-    const preventDropNavigation = (event: DragEvent) => event.preventDefault();
-    window.addEventListener("drop", preventDropNavigation);
     void load();
     void loadMetadata();
     void loadWorkflowApp();
@@ -1921,7 +1918,6 @@ function createView(lifecycle: Lifecycle<Props>) {
     document.addEventListener("visibilitychange", focus);
     return () => {
       alive = false;
-      window.removeEventListener("drop", preventDropNavigation);
       statusQueue.clear();
       clearTimeout(noticeTimer);
       media.removeEventListener("change", readSystemTheme);
@@ -3790,12 +3786,12 @@ function createView(lifecycle: Lifecycle<Props>) {
                                     <section aria-label="Collections" className="overview-collections">
                                       {collectionShelf.value.map(([name, count]) => (
                                         <CollectionContextMenu key={name} {...collectionActions(name)}>
-                                        <Card className="overview-collection-card" {...collectionDropTarget(name, moveCollection, true)}>
+                                        <Card className="overview-collection-card">
                                           <CollectionActions {...collectionActions(name)} />
-                                          <Button
+                                          <DraggableCollectionButton
                                             className="overview-collection-open"
-                                            draggable
-                                            onDragStart={(event) => collectionDragStart(event, name)}
+                                            name={name}
+                                            onMove={moveCollection}
                                             onClick={() => {
                                               query.value = "";
                                               view.value = "collection:" + name;
@@ -3806,7 +3802,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                                               <strong>{name}</strong>
                                               <small>{count} {count === 1 ? "repository" : "repositories"}</small>
                                             </span>
-                                          </Button>
+                                          </DraggableCollectionButton>
                                         </Card>
                                         </CollectionContextMenu>
                                       ))}

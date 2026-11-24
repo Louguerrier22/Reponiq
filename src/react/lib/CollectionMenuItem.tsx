@@ -1,6 +1,6 @@
 import { ChevronRight, Folder } from "lucide-react";
 import { useState } from "react";
-import { CollectionContextMenu, collectionDragStart, collectionDropTarget, type CollectionActionsProps, type CollectionMove } from "./CollectionActions";
+import { CollectionContextMenu, useCollectionDrag, type CollectionActionsProps, type CollectionMove } from "./CollectionActions";
 import type { Repo } from "../../lib/api";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../shadcn/collapsible";
 import {
@@ -29,6 +29,7 @@ export default function CollectionMenuItem({ name, repositories, active, selecte
   const [open, setOpen] = useState(false);
   const [limit, setLimit] = useState(pageSize);
   const { isMobile, setOpenMobile } = useSidebar();
+  const drag = useCollectionDrag(name, onMove);
   const toggleLabel = `${open ? "Collapse" : "Expand"} ${name}`;
 
   return (
@@ -40,9 +41,7 @@ export default function CollectionMenuItem({ name, repositories, active, selecte
         <CollectionContextMenu {...actions}>
           <SidebarMenuButton asChild isActive={active} tooltip={name}>
             <Button
-              draggable
-              onDragStart={(event) => collectionDragStart(event, name)}
-              {...collectionDropTarget(name, onMove)}
+              {...drag}
               title={name}
               className={active ? "active" : undefined}
               aria-current={active ? "page" : undefined}

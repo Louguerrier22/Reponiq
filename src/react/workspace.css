@@ -336,3 +336,5 @@
 }
 
 .diff-header-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+[data-collection-drag-target] { touch-action: pan-y; user-select: none; }

@@ -1,7 +1,8 @@
 import { Ellipsis } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
-import type { DragEvent, ReactElement } from "react";
+import { useRef, type PointerEvent, type ReactElement } from "react";
 import { Button } from "../shadcn/button";
+import { Button as WorkspaceButton } from "../ui";
 import { actionItemClass, actionMenuClass, ActionsContextMenu } from "./ActionsContextMenu";
 
 export type CollectionActionsProps = {
@@ -14,32 +15,62 @@ export type CollectionActionsProps = {
 
 export type CollectionMove = (source: string, destination: string, after: boolean) => void;
 
-const dragType = "application/x-reponiq-collection";
+export function useCollectionDrag(name: string, onMove: CollectionMove, inGrid = false) {
+  const drag = useRef<{ pointer: number; x: number; y: number; moved: boolean } | null>(null);
+  const suppressClick = useRef(false);
 
-export function collectionDragStart(event: DragEvent, name: string) {
-  event.dataTransfer.effectAllowed = "move";
-  event.dataTransfer.setData(dragType, name);
+  function onPointerDown(event: PointerEvent<HTMLButtonElement>) {
+    if (!event.isPrimary || event.button !== 0) return;
+    suppressClick.current = false;
+    drag.current = { pointer: event.pointerId, x: event.clientX, y: event.clientY, moved: false };
+  }
+
+  function onPointerMove(event: PointerEvent<HTMLButtonElement>) {
+    const start = drag.current;
+    if (!start || start.pointer !== event.pointerId || start.moved || !(event.buttons & 1)) return;
+    if (Math.hypot(event.clientX - start.x, event.clientY - start.y) < 5) return;
+    start.moved = true;
+    suppressClick.current = true;
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function onPointerUp(event: PointerEvent<HTMLButtonElement>) {
+    const start = drag.current;
+    drag.current = null;
+    if (!start || start.pointer !== event.pointerId) return;
+    if (!start.moved && Math.hypot(event.clientX - start.x, event.clientY - start.y) < 5) return;
+    suppressClick.current = true;
+    const target = document.elementFromPoint(event.clientX, event.clientY)
+      ?.closest<HTMLElement>("[data-collection-drag-target]");
+    const destination = target?.dataset.collectionDragTarget;
+    if (!target || !destination || destination === name) return;
+    const bounds = target.getBoundingClientRect();
+    const after = inGrid
+      ? event.clientX >= bounds.left + bounds.width / 2
+      : event.clientY >= bounds.top + bounds.height / 2;
+    onMove(name, destination, after);
+  }
+
+  return {
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
+    onPointerCancel: () => { drag.current = null; },
+    onClickCapture: (event: React.MouseEvent) => {
+      if (!suppressClick.current || event.detail === 0) return;
+      suppressClick.current = false;
+      event.stopPropagation();
+      event.preventDefault();
+    },
+    "data-collection-drag-target": name,
+  };
 }
 
-export function collectionDropTarget(name: string, onMove: CollectionMove, inGrid = false) {
-  return {
-    onDragOver(event: DragEvent) {
-      if (!event.dataTransfer.types.includes(dragType)) return;
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
-    },
-    onDrop(event: DragEvent) {
-      if (!event.dataTransfer.types.includes(dragType)) return;
-      event.preventDefault();
-      const source = event.dataTransfer.getData(dragType);
-      if (!source || source === name) return;
-      const bounds = event.currentTarget.getBoundingClientRect();
-      const after = inGrid
-        ? event.clientX >= bounds.left + bounds.width / 2
-        : event.clientY >= bounds.top + bounds.height / 2;
-      onMove(source, name, after);
-    },
-  };
+export function DraggableCollectionButton({
+  name, onMove, ...props
+}: React.ComponentProps<typeof WorkspaceButton> & { name: string; onMove: CollectionMove }) {
+  const drag = useCollectionDrag(name, onMove, true);
+  return <WorkspaceButton {...props} {...drag} />;
 }
 
 function collectionItems({ onRename, onDelete, moveEarlier, moveLater }: CollectionActionsProps) {

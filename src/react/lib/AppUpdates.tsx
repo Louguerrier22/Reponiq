@@ -305,13 +305,6 @@ function createView(lifecycle: Lifecycle<Props>) {
               </>
             )}
             <div className={cn("modal-actions")}>
-              <Button
-                variant={"secondary"}
-                disabled={installing.value}
-                onClick={() => (open.value = false)}
-              >
-                {"Close"}
-              </Button>
               {selectionChanged.value ? (
                 <Button variant="primary" disabled={saving.value || checking.value || installing.value} onClick={saveSelection}>
                   Save and check
