@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.7 (Beta)
+
+- Compact repository header keeps pinning beside the title and branch, sync, and Open together. Less frequent actions live under More repository actions.
+
 ## 1.2.6 (Beta)
 
 - Collections follow the pointer while dragging. The empty slot previews the new order in Overview and the sidebar, including when the pointer leaves the collection area.

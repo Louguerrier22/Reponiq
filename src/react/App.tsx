@@ -7,6 +7,7 @@ import {
   CircleAlert,
   Clock3,
   Code2,
+  Ellipsis,
   FileCode,
   Folder,
   FolderGit2,
@@ -2229,33 +2230,26 @@ function createView(lifecycle: Lifecycle<Props>) {
                         className={cn("workbench-main")}
                       >
                         <div className={cn("workbench-header", activeTab.value === "changes" && "changes-header")}>
-                          <div className={cn("page-heading workbench-heading")}>
-                            <div>
-                              <Button
-                                onClick={() => {
-                                  selected.value = null;
-                                  details.value = null;
-                                }}
-                                className={cn("back-link")}
-                              >
-                                <ArrowLeftRight size={14} />
-                                {" All repositories"}
-                              </Button>
-                              <div className={cn("heading-row")}>
-                                <PlatformIcon
-                                  remote={currentRepo.remote_url}
-                                  size={25}
-                                />
-                                <h1>{currentRepo.name}</h1>
-                              </div>
-                              <p title={currentRepo.path}>{currentRepo.path}</p>
-                            </div>
+                          <div className="workbench-back">
+                            <Button
+                              onClick={() => {
+                                selected.value = null;
+                                details.value = null;
+                              }}
+                              className="back-link"
+                            >
+                              <ArrowLeftRight size={14} />
+                              {" All repositories"}
+                            </Button>
                           </div>
-                          <div className="repo-command-bar" role="group" aria-label="Repository controls">
-                            <div className="repo-organization-buttons" role="group" aria-label="Repository organization">
+                          <div className="workbench-heading">
+                            <div className="heading-row">
+                              <PlatformIcon remote={currentRepo.remote_url} size={25} />
+                              <h1>{currentRepo.name}</h1>
                               <ShadcnButton
                                 variant="ghost"
                                 size="icon"
+                                aria-pressed={currentRepo.pinned}
                                 aria-label={
                                   currentRepo.pinned
                                     ? "Unpin repository"
@@ -2273,34 +2267,10 @@ function createView(lifecycle: Lifecycle<Props>) {
                                   }
                                 />
                               </ShadcnButton>
-                              <ShadcnButton
-                                data-tour="organize"
-                                variant="outline"
-                                disabled={working.value}
-                                onClick={() => openOrganization(currentRepo)}
-                              >
-                                <Tags size={15} />
-                                {" Organize"}
-                              </ShadcnButton>
-                              {launchPreferences.value && (
-                                <ShadcnField
-                                  orientation="horizontal"
-                                  className="repo-fetch-switch"
-                                  title={launchPreferences.value.enabled ? undefined : "Turn on Fetch on launch in Settings to use this preference."}
-                                >
-                                  <Switch
-                                    id="repository-fetch-on-launch"
-                                    checked={repoFetchEnabled(
-                                      { ...currentRepo, fetch_mode: workflowFor(currentRepo)?.fetch_mode },
-                                      launchPreferences.value.scope,
-                                    )}
-                                    disabled={!repoMetadataReady.value || savingRepoFetch.value.has(currentRepo.id)}
-                                    onCheckedChange={(enabled) => void toggleRepoFetch(currentRepo, enabled)}
-                                  />
-                                  <FieldLabel htmlFor="repository-fetch-on-launch">Fetch on launch</FieldLabel>
-                                </ShadcnField>
-                              )}
                             </div>
+                            <p title={currentRepo.path}>{currentRepo.path}</p>
+                          </div>
+                          <div className="repo-command-bar" role="group" aria-label="Repository controls">
                             <ShadcnButton
                               aria-label={
                                 "Switch branch. Current branch: " +
@@ -2321,6 +2291,19 @@ function createView(lifecycle: Lifecycle<Props>) {
                               data-tour="sync"
                               className="repo-sync-buttons"
                             >
+                              {syncAction.value ? (
+                                  <ShadcnButton
+                                    variant={activeTab.value === "changes" && currentRepo.dirty ? "outline" : "default"}
+                                    disabled={!canFetch.value}
+                                    onClick={() =>
+                                      confirmGit(syncAction.value!.action)
+                                    }
+                                  >
+                                    <syncAction.value.icon size={14} />{" "}
+                                    {syncAction.value.label}
+                                  </ShadcnButton>
+                              ) : null}
+                              {openMenu(currentRepo)}
                               {(() => {
                                 const actions = [
                                   ...(details.value?.saved_changes.length ? [{
@@ -2339,51 +2322,64 @@ function createView(lifecycle: Lifecycle<Props>) {
                                     select: () => runGit("fetch"),
                                   }] : []),
                                 ];
-                                const management = repositoryActions(currentRepo).map((action) => ({
-                                  ...action,
-                                  disabled: !action.select,
-                                }));
-                                const changesTab = activeTab.value === "changes";
-                                const menuActions = changesTab ? [...actions, ...management] : management;
+                                const menuActions = [
+                                  {
+                                    label: "Organize",
+                                    disabled: working.value,
+                                    select: () => openOrganization(currentRepo),
+                                  },
+                                  ...actions,
+                                  {
+                                    label: "Repository settings",
+                                    disabled: !repoMetadataReady.value || !workflowReady.value,
+                                    select: () => (showRepoSettings.value = true),
+                                  },
+                                  {
+                                    label: "Locate folder",
+                                    disabled: working.value,
+                                    select: () => (locating.value = currentRepo),
+                                  },
+                                  ...repositoryActions(currentRepo).map((action) => ({ ...action, disabled: !action.select })),
+                                ];
                                 return (
-                                  <>
-                                    {!changesTab && actions.map(({ label, disabled, select }) => (
-                                      <ShadcnButton key={label} variant="outline" disabled={disabled} onClick={select}>
-                                        {label === "Fetch" && <RefreshCw size={14} />}
-                                        {label}
+                                  <Popover>
+                                    <PopoverTrigger asChild>
+                                      <ShadcnButton variant="ghost" size="icon" aria-label="More repository actions" data-tour="organize">
+                                        <Ellipsis size={18} />
                                       </ShadcnButton>
-                                    ))}
-                                    <Popover>
-                                      <PopoverTrigger asChild>
-                                        <ShadcnButton variant="outline">More actions</ShadcnButton>
-                                      </PopoverTrigger>
-                                      <PopoverContent align="end" className="changes-actions" aria-label="More repository actions">
-                                        {menuActions.map(({ label, disabled, select }) => (
-                                          <PopoverClose key={label} asChild>
-                                            <ShadcnButton variant="ghost" disabled={disabled} onClick={select}>
-                                              {label}
-                                            </ShadcnButton>
-                                          </PopoverClose>
-                                        ))}
-                                      </PopoverContent>
-                                    </Popover>
-                                  </>
+                                    </PopoverTrigger>
+                                    <PopoverContent align="end" className="changes-actions repo-more-actions" aria-label="More repository actions">
+                                      {menuActions.map(({ label, disabled, select }) => (
+                                        <PopoverClose key={label} asChild>
+                                          <ShadcnButton variant="ghost" disabled={disabled} onClick={select}>
+                                            {label === "Organize" && <Tags size={15} />}
+                                            {label}
+                                          </ShadcnButton>
+                                        </PopoverClose>
+                                      ))}
+                                      {launchPreferences.value && (
+                                        <ShadcnField
+                                          orientation="horizontal"
+                                          className="repo-fetch-switch"
+                                          title={launchPreferences.value.enabled ? undefined : "Turn on Fetch on launch in Settings to use this preference."}
+                                        >
+                                          <FieldLabel htmlFor="repository-fetch-on-launch">Fetch on launch</FieldLabel>
+                                          <Switch
+                                            id="repository-fetch-on-launch"
+                                            checked={repoFetchEnabled(
+                                              { ...currentRepo, fetch_mode: workflowFor(currentRepo)?.fetch_mode },
+                                              launchPreferences.value.scope,
+                                            )}
+                                            disabled={!repoMetadataReady.value || savingRepoFetch.value.has(currentRepo.id)}
+                                            onCheckedChange={(enabled) => void toggleRepoFetch(currentRepo, enabled)}
+                                          />
+                                        </ShadcnField>
+                                      )}
+                                    </PopoverContent>
+                                  </Popover>
                                 );
                               })()}
-                              {syncAction.value ? (
-                                  <ShadcnButton
-                                    variant={activeTab.value === "changes" && currentRepo.dirty ? "outline" : "default"}
-                                    disabled={!canFetch.value}
-                                    onClick={() =>
-                                      confirmGit(syncAction.value!.action)
-                                    }
-                                  >
-                                    <syncAction.value.icon size={14} />{" "}
-                                    {syncAction.value.label}
-                                  </ShadcnButton>
-                              ) : null}
-                              {openMenu(currentRepo)}
-                              </div>
+                            </div>
                           </div>
                         </div>
                         <Tabs.Root

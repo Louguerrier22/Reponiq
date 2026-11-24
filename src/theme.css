@@ -108,14 +108,6 @@
 .setup-progress > span { grid-column: 2; grid-row: 1; color: var(--muted-foreground); font-size: 12px; font-variant-numeric: tabular-nums; }
 .setup-progress > [data-slot="progress"] { grid-column: 1; grid-row: 1; }
 .settings-panels:not([hidden]) { display: grid; gap: 16px; }
-[data-slot="field"].repo-fetch-switch {
-  width: auto;
-  min-height: var(--control-height);
-  align-items: center;
-  gap: 8px;
-  padding-inline: 6px;
-  white-space: nowrap;
-}
 .startup-fetch-checklist {
   max-height: 190px;
   overflow-y: auto;
@@ -152,24 +144,35 @@
   gap: 4px;
   padding: 2px;
 }
-.workbench-header { display: grid; gap: 12px; margin-bottom: 14px; }
-.workbench-header .workbench-heading { margin: 0; min-width: 0; }
-.workbench-header .workbench-heading > div:first-child { min-width: 0; }
-.workbench-header .heading-row h1 { overflow-wrap: anywhere; }
-.repo-command-bar, .repo-organization-buttons, .repo-sync-buttons {
+.workbench-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 14px;
+}
+.workbench-back { flex-basis: 100%; }
+.workbench-back .back-link { margin: 0; }
+.workbench-header .workbench-heading { flex: 1 1 15rem; margin: 0; min-width: 0; }
+.workbench-header .heading-row h1 { min-width: 0; overflow-wrap: anywhere; }
+.workbench-header .heading-row > svg,
+.workbench-header .heading-row > button { flex-shrink: 0; }
+.repo-command-bar, .repo-sync-buttons {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--control-gap);
   min-width: 0;
 }
-.repo-command-bar { column-gap: calc(2 * var(--control-gap)); }
+.repo-command-bar { max-width: 100%; justify-content: flex-end; margin-inline-start: auto; }
+.repo-sync-buttons { justify-content: flex-end; }
 @media (min-width: 1000px) {
   .workbench-main .changes-workbench { grid-template-columns: minmax(210px, 25%) minmax(0, 1fr); }
 }
 .repo-command-bar [data-slot="button"] { height: var(--control-height); }
 .repo-command-bar [data-size="icon"] { width: var(--control-height); }
 .repo-command-bar .current-branch { max-width: min(240px,100%); }
+.repo-command-bar .current-branch > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .workbench-main .repository-tabs > button {
   display: flex;
   align-items: center;

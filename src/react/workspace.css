@@ -121,6 +121,21 @@
   box-shadow: none;
 }
 
+.repo-more-actions[data-slot="popover-content"] {
+  min-width: min(200px, var(--radix-popover-content-available-width));
+  max-height: var(--radix-popover-content-available-height);
+  overflow-y: auto;
+}
+
+[data-slot="field"].repo-fetch-switch {
+  min-height: var(--control-height);
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--border);
+}
+
 :is(.changes-tab, .history-workbench) {
   --workbench-preview-height: clamp(230px, 42vh, 470px);
 }
