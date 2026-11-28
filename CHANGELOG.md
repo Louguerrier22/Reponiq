@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.8 (Beta)
+
+- Account sync skips a repository GitHub refuses, such as one in an organization that restricts third-party apps, and keeps updating CI status for the rest. The result names the skipped repositories. An expired token, rate limit or GitHub outage still stops the sync.
+
 ## 1.2.7 (Beta)
 
 - Compact repository header keeps pinning beside the title and branch, sync, and Open together. Less frequent actions live under More repository actions.

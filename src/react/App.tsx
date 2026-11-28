@@ -161,6 +161,11 @@ function createView(lifecycle: Lifecycle<Props>) {
     { value: "include", label: "Include checked" },
   ];
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+  // Account sync names repositories GitHub refused; show that instead of a plain success.
+  function syncNotice(fallback: string) {
+    return (result: unknown) =>
+      typeof result === "string" && result.includes("Skipped") ? result : fallback;
+  }
   function showNotice(message: string) {
     clearTimeout(noticeTimer);
     toast.success(message, { id: "reponiq-feedback" });
@@ -1118,7 +1123,7 @@ function createView(lifecycle: Lifecycle<Props>) {
 
   async function act(
     fn: () => Promise<unknown>,
-    msg: string,
+    msg: string | ((result: unknown) => string),
     refreshWorkspace = true,
   ) {
     if (working.value) return false;
@@ -1130,7 +1135,7 @@ function createView(lifecycle: Lifecycle<Props>) {
       statusVersions.set(actionRepo, (statusVersions.get(actionRepo) ?? 0) + 1);
     try {
       const result = await fn();
-      showNotice(msg);
+      showNotice(typeof msg === "function" ? msg(result) : msg);
       if (selected.value === actionRepo)
         actionResult.value = typeof result === "string" ? result : "";
       if (refreshWorkspace) await load();
@@ -1436,7 +1441,7 @@ function createView(lifecycle: Lifecycle<Props>) {
       const results = [];
       for (const a of accounts.value) results.push(await api.sync(a.id));
       return results.join("\n");
-    }, "GitHub workflows synchronized");
+    }, syncNotice("GitHub workflows synchronized"));
   }
   async function runGit(action: string, args: string[] = []) {
     if (!current.value || working.value) return false;
@@ -3561,7 +3566,7 @@ function createView(lifecycle: Lifecycle<Props>) {
                               accounts={accounts.value}
                               working={working.value}
                               onConnect={openAccount}
-                              onSync={(account) => act(() => api.sync(account.id), "Synchronized " + account.login)}
+                              onSync={(account) => act(() => api.sync(account.id), syncNotice("Synchronized " + account.login))}
                               onDisconnect={disconnectAccount}
                             />
                           </Tabs.Content>
