@@ -1598,7 +1598,14 @@ async fn sync_account(id: i64, state: tauri::State<'_, State>) -> Result<String,
             .map_err(|e| format!("Sync stopped after {updated} repositories: {e}"))?;
         let status = response.status();
         if !status.is_success() {
-            if sync_should_stop(status, response.headers()) {
+            let headers = response.headers().clone();
+            // Secondary rate limits can arrive as a plain 403 that only the body identifies.
+            let body = if status == reqwest::StatusCode::FORBIDDEN {
+                bounded_error_body(response).await
+            } else {
+                String::new()
+            };
+            if sync_should_stop(status, &headers, &body) {
                 return Err(format!(
                     "Sync stopped after {updated} repositories: GitHub API returned {status}. Check token access, connection, or API rate limits."
                 ));
@@ -1675,12 +1682,32 @@ fn skipped_sync_message(updated: usize, login: &str, skipped: &[String]) -> Stri
     )
 }
 
+/// Reads at most 8 KiB of an error response; the body is only inspected, never shown.
+async fn bounded_error_body(mut response: reqwest::Response) -> String {
+    const LIMIT: usize = 8 * 1024;
+    let mut bytes = Vec::new();
+    while bytes.len() < LIMIT {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                bytes.extend_from_slice(&chunk[..chunk.len().min(LIMIT - bytes.len())])
+            }
+            _ => break,
+        }
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
 /// Account-wide failures stop the sync; anything else only skips that repository.
-fn sync_should_stop(status: reqwest::StatusCode, headers: &reqwest::header::HeaderMap) -> bool {
+fn sync_should_stop(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    body: &str,
+) -> bool {
     let rate_limited = headers
         .get("x-ratelimit-remaining")
         .is_some_and(|v| v.as_bytes() == b"0")
-        || headers.contains_key("retry-after");
+        || headers.contains_key("retry-after")
+        || body.to_ascii_lowercase().contains("rate limit");
     status == reqwest::StatusCode::UNAUTHORIZED
         || status == reqwest::StatusCode::TOO_MANY_REQUESTS
         || status.is_server_error()
@@ -1882,17 +1909,23 @@ mod tests {
         use reqwest::header::{HeaderMap, HeaderValue};
         use reqwest::StatusCode;
         let none = HeaderMap::new();
-        assert!(!sync_should_stop(StatusCode::FORBIDDEN, &none));
-        assert!(!sync_should_stop(StatusCode::NOT_FOUND, &none));
-        assert!(sync_should_stop(StatusCode::UNAUTHORIZED, &none));
-        assert!(sync_should_stop(StatusCode::TOO_MANY_REQUESTS, &none));
-        assert!(sync_should_stop(StatusCode::BAD_GATEWAY, &none));
+        let restricted = "Although you appear to have the correct authorization credentials, the `org` organization has enabled OAuth App access restrictions";
+        assert!(!sync_should_stop(StatusCode::FORBIDDEN, &none, restricted));
+        assert!(!sync_should_stop(StatusCode::NOT_FOUND, &none, ""));
+        assert!(sync_should_stop(StatusCode::UNAUTHORIZED, &none, ""));
+        assert!(sync_should_stop(StatusCode::TOO_MANY_REQUESTS, &none, ""));
+        assert!(sync_should_stop(StatusCode::BAD_GATEWAY, &none, ""));
+        assert!(sync_should_stop(
+            StatusCode::FORBIDDEN,
+            &none,
+            "You have exceeded a secondary rate limit. Please wait a few minutes before you try again."
+        ));
         let mut limited = HeaderMap::new();
         limited.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
-        assert!(sync_should_stop(StatusCode::FORBIDDEN, &limited));
+        assert!(sync_should_stop(StatusCode::FORBIDDEN, &limited, ""));
         let mut secondary = HeaderMap::new();
         secondary.insert("retry-after", HeaderValue::from_static("60"));
-        assert!(sync_should_stop(StatusCode::FORBIDDEN, &secondary));
+        assert!(sync_should_stop(StatusCode::FORBIDDEN, &secondary, ""));
         let skipped = (1..=7)
             .map(|n| format!("org/repo{n} (403)"))
             .collect::<Vec<_>>();
